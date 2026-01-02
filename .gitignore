@@ -1,6 +1,7 @@
 # Bundler
 /.bundle/
 /vendor/bundle/
+/vendor/executorch/
 Gemfile.lock
 
 # Build artifacts

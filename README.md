@@ -34,7 +34,7 @@ cd executorch
 ./install_requirements.sh
 
 cmake -B cmake-out \
-  -DCMAKE_INSTALL_PREFIX=$HOME/.local/executorch \
+  -DCMAKE_INSTALL_PREFIX=vendor/executorch \
   -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON \
   -DEXECUTORCH_BUILD_EXTENSION_DATA_LOADER=ON \
   -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
@@ -49,7 +49,7 @@ cmake --install cmake-out
 Tell Bundler where ExecuTorch is installed (only needed once per project):
 
 ```bash
-bundle config set --local build.executorch --with-executorch-dir=$HOME/.local/executorch
+bundle config set --local build.executorch --with-executorch-dir=vendor/executorch
 ```
 
 Add to your Gemfile:
@@ -139,8 +139,8 @@ with open("model.pte", "wb") as f:
 Verify your installation and configure the path:
 
 ```bash
-ls ~/.local/executorch/include/executorch  # Should exist
-bundle config set --local build.executorch --with-executorch-dir=$HOME/.local/executorch
+ls vendor/executorch/include/executorch  # Should exist
+bundle config set --local build.executorch --with-executorch-dir=vendor/executorch
 ```
 </details>
 
@@ -180,7 +180,7 @@ EXECUTORCH_EXTRA_LIBS=portable_ops_lib,portable_kernels bundle exec rake compile
 git clone https://github.com/benngarcia/executorch-ruby.git
 cd executorch-ruby
 bundle install
-bundle config set --local build.executorch --with-executorch-dir=$HOME/.local/executorch
+bundle config set --local build.executorch --with-executorch-dir=vendor/executorch
 bundle exec rake compile
 bundle exec rake test
 ```
