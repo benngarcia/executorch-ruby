@@ -1,0 +1,34 @@
+# Bundler
+/.bundle/
+/vendor/bundle/
+Gemfile.lock
+
+# Build artifacts
+/tmp/
+/pkg/
+*.gem
+*.so
+*.bundle
+*.o
+*.a
+Makefile
+mkmf.log
+
+# IDE
+.idea/
+*.swp
+*.swo
+.vscode/
+
+# macOS
+.DS_Store
+
+# Test models (generated)
+test/support/models/*.pte
+
+# Generated documentation
+/doc/
+/rdoc/
+
+# Coverage
+/coverage/
