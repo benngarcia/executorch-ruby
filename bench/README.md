@@ -42,6 +42,14 @@ bundle exec ruby bench/run_bench.rb --label mine
 bundle exec ruby bench/compare.rb bench/results/baseline.json bench/results/mine.json
 ```
 
+To benchmark an XNNPACK-delegated build (see `FINDINGS.md` -- this is worth
+~658x on `forward`), export the lowered variant and point the harness at it:
+
+```bash
+python3 bench/pt_to_pte.py bench/models/*.pt --xnnpack   # writes <name>.xnnpack.pte
+bundle exec ruby bench/run_bench.rb --label xnnpack --variant xnnpack
+```
+
 `pt_to_pte.py` works on any `.pt` you have, not just these:
 
 ```bash

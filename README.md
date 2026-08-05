@@ -155,29 +155,35 @@ build links** — not the Ruby layer.
 
 A default build uses the portable kernels: reference implementations written for
 correctness and portability, with no vectorization or threading. They work
-everywhere and they are slow. On this repo's benchmarks, resnet18 takes ~8.3 s
-per call on portable kernels.
+everywhere and they are slow — resnet18 takes **8.3 s** per call.
 
-Two independent ways to fix that:
+Build with the XNNPACK delegate instead:
 
 ```bash
 cmake -B cmake-out \
-  -DEXECUTORCH_BUILD_KERNELS_OPTIMIZED=ON \   # faster CPU kernels, works on existing .pte
-  -DEXECUTORCH_BUILD_XNNPACK=ON \             # XNNPACK delegate, needs a re-export
+  -DEXECUTORCH_BUILD_XNNPACK=ON \
   ... # other flags as above
 ```
 
-`extconf.rb` links whichever of these it finds in your ExecuTorch install. The
-XNNPACK delegate additionally requires the model to have been lowered with
-`XnnpackPartitioner` at export time — see `bench/pt_to_pte.py --xnnpack`.
+and export your model through the XNNPACK partitioner (see
+`bench/pt_to_pte.py --xnnpack`). Both halves are required — the backend has to
+be linked at build time *and* targeted at export time.
 
-For the Ruby side: prefer `Tensor.from_bytes` over the Array constructor for
-large inputs, and `Tensor#flat_to_a` over `#to_a` when you don't need the nested
-shape.
+That takes resnet18 from 8.3 s to **12.6 ms** — 658×, and about 2× faster than
+PyTorch eager on the same machine. `extconf.rb` links the backend automatically
+when it finds it in your ExecuTorch install.
+
+On the Ruby side, once the runtime is fast the boundary becomes the bottleneck:
+
+- Prefer `Tensor.from_bytes` over the Array constructor for large inputs. On
+  mobilenet_v2 that's 0.85 ms instead of 7.6 ms, against a 3.4 ms inference.
+- Prefer `Tensor#flat_to_a` over `#to_a` when you don't need the nested shape.
+- Prefer `Tensor.new(flat, shape: ...)` over a nested Array when you have the
+  choice — shape inference has to walk the nesting.
 
 See [`bench/`](bench/) for the eval + profiling harness, and
-[`bench/FINDINGS.md`](bench/FINDINGS.md) for a walkthrough of where the time
-actually goes.
+[`bench/FINDINGS.md`](bench/FINDINGS.md) for the full walkthrough — including
+why fixing the kernels is what makes the binding work matter.
 
 ## Troubleshooting
 

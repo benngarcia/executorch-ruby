@@ -183,18 +183,31 @@ def link_if_present(lib_dir, lib, label = nil)
   true
 end
 
-# Portable kernels: the reference implementations. Correct, and slow -- they are
-# written for clarity and portability, not speed. Always available.
-if force_load(lib_dir, 'portable_ops_lib')
-  link_if_present(lib_dir, 'portable_kernels')
-end
+# Exactly one operator library may be whole-archived. Each one registers the
+# full ATen op set into the same global table, so linking two makes the runtime
+# abort at init on duplicate registration.
+#
+#   optimized_native_cpu_ops_lib  vectorized kernels where they exist, portable
+#                                 fallbacks elsewhere. Built with
+#                                 EXECUTORCH_BUILD_KERNELS_OPTIMIZED=ON.
+#   portable_ops_lib              reference implementations only: correct,
+#                                 portable, and slow. Always available.
+#
+# Prefer the optimized set when the install has it. EXECUTORCH_OPS_LIB
+# overrides the choice.
+ops_lib = ENV['EXECUTORCH_OPS_LIB'] ||
+          %w[optimized_native_cpu_ops_lib portable_ops_lib].find do |lib|
+            File.exist?(File.join(lib_dir, "lib#{lib}.a"))
+          end
 
-# Optimized CPU kernels, if ExecuTorch was built with
-# EXECUTORCH_BUILD_KERNELS_OPTIMIZED=ON. These override portable
-# implementations for the ops they cover and are dramatically faster.
-if force_load(lib_dir, 'optimized_native_cpu_ops_lib')
-  link_if_present(lib_dir, 'optimized_kernels')
-  link_if_present(lib_dir, 'eigen_blas')
+if ops_lib && force_load(lib_dir, ops_lib)
+  # Kernel implementations backing the registrations above.
+  %w[optimized_kernels optimized_portable_kernels portable_kernels
+     cpublas eigen_blas].each do |lib|
+    link_if_present(lib_dir, lib)
+  end
+else
+  warn 'Warning: no operator library found; models will fail to load.'
 end
 
 # XNNPACK delegate, if ExecuTorch was built with EXECUTORCH_BUILD_XNNPACK=ON.

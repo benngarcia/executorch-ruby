@@ -37,6 +37,7 @@ RESULTS_DIR = File.join(BENCH_DIR, "results")
 options = {
   label: "current",
   models: nil,
+  variant: nil,
   samples: 25,
   warmup: 20,
   sample_us: 500,
@@ -49,6 +50,9 @@ OptionParser.new do |o|
   o.banner = "Usage: ruby bench/run_bench.rb [options]"
   o.on("--label LABEL", "name for this run (used in the results filename)") { |v| options[:label] = v }
   o.on("--models a,b,c", Array, "only these models") { |v| options[:models] = v }
+  o.on("--variant NAME", "use <model>.<NAME>.pte instead of <model>.pte (e.g. xnnpack)") do |v|
+    options[:variant] = v
+  end
   o.on("--samples N", Integer, "timing samples per phase") { |v| options[:samples] = v }
   o.on("--warmup N", Integer, "warmup iterations per phase") { |v| options[:warmup] = v }
   o.on("--sample-us N", Integer, "target duration of one timing sample") { |v| options[:sample_us] = v }
@@ -126,19 +130,31 @@ def fmt(ms)
   ms >= 1 ? format("%8.3f", ms) : format("%8.4f", ms)
 end
 
-metas = Dir[File.join(MODELS_DIR, "*.meta.json")].sort.map { |p| JSON.parse(File.read(p)) }
-metas.select! { |m| options[:models].include?(m["name"]) } if options[:models]
-metas.select! { |m| File.exist?(File.join(MODELS_DIR, "#{m['name']}.pte")) }
-
-if metas.empty?
-  abort "No .pte models found in #{MODELS_DIR}.\n" \
-        "Run: python3 bench/make_pt_models.py && python3 bench/pt_to_pte.py bench/models/*.pt"
+def pte_path(name, variant)
+  suffix = variant ? ".#{variant}.pte" : ".pte"
+  File.join(MODELS_DIR, "#{name}#{suffix}")
 end
 
-puts "executorch-ruby bench  (label=#{options[:label]}, ruby=#{RUBY_VERSION})"
+metas = Dir[File.join(MODELS_DIR, "*.meta.json")].sort.map { |p| JSON.parse(File.read(p)) }
+metas.select! { |m| options[:models].include?(m["name"]) } if options[:models]
+metas.select! { |m| File.exist?(pte_path(m["name"], options[:variant])) }
+
+if metas.empty?
+  abort "No#{options[:variant] ? " #{options[:variant]}" : ''} .pte models found in #{MODELS_DIR}.\n" \
+        "Run: python3 bench/make_pt_models.py && python3 bench/pt_to_pte.py bench/models/*.pt" \
+        "#{options[:variant] ? " --#{options[:variant]}" : ''}"
+end
+
+puts "executorch-ruby bench  (label=#{options[:label]}, " \
+     "variant=#{options[:variant] || 'portable'}, ruby=#{RUBY_VERSION})"
 puts
 
-results = { "label" => options[:label], "ruby" => RUBY_VERSION, "models" => {} }
+results = {
+  "label" => options[:label],
+  "variant" => options[:variant] || "portable",
+  "ruby" => RUBY_VERSION,
+  "models" => {}
+}
 failures = []
 
 metas.each do |meta|
@@ -148,7 +164,7 @@ metas.each do |meta|
   flat_input, expected = read_golden(meta)
   nested_input = nest(flat_input, shape)
 
-  model = Executorch::Model.new(File.join(MODELS_DIR, "#{name}.pte"))
+  model = Executorch::Model.new(pte_path(name, options[:variant]))
 
   # --- eval: do we agree with PyTorch? ---
   tensor = Executorch::Tensor.new(flat_input, shape: shape)

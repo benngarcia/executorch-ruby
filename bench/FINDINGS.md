@@ -13,6 +13,10 @@ apart:
    but it does control which kernels get linked, and the default is the slow
    one.
 
+Short version: the kernels are worth **658×** and the bindings are worth up to
+**20×**, and you need both — on a fast runtime, 96.6% of a mobilenet_v2 call
+was binding overhead. Part 3 has the cross-product.
+
 ---
 
 ## Part 1: the bindings
@@ -175,52 +179,137 @@ floor than before (0.082 ms → 0.050 ms e2e).
 
 This one dwarfs everything above, and it isn't a binding problem at all.
 
-With the runtime built the way the README describes, `forward()` on resnet18
+With the runtime built the way the README described, `forward()` on resnet18
 takes **8.26 seconds**. PyTorch eager, same checkpoint, same machine: **25 ms**.
 That's ~330× slower, and no amount of binding work touches it.
 
 The reason is that a default ExecuTorch build links `portable_ops_lib` — the
 reference kernel implementations. They're written for correctness and
-portability, not speed: no vectorization, no blocking, no threading. They are
-the right default for a runtime that has to build anywhere, and the wrong choice
-for anything latency-sensitive.
+portability, not speed: no vectorization, no blocking, no threading. They're the
+right default for a runtime that has to build anywhere, and the wrong choice for
+anything latency-sensitive.
 
-Two things fix this, and they're independent:
+Two candidate fixes, and it's worth being precise about what each one bought,
+because they were not equal:
 
-- **Optimized CPU kernels** (`EXECUTORCH_BUILD_KERNELS_OPTIMIZED=ON`) — faster
-  implementations of the same ops. Works on existing `.pte` files, no re-export.
-- **The XNNPACK delegate** (`EXECUTORCH_BUILD_XNNPACK=ON`) — hands whole
-  subgraphs to XNNPACK. Requires the `.pte` to have been lowered with
-  `XnnpackPartitioner` at export time, so it needs both a rebuild *and* a
-  re-export.
+### Optimized CPU kernels — no measurable help
 
-`bench/pt_to_pte.py --xnnpack` produces the lowered variant, and `extconf.rb`
-now links either backend when it's present in the ExecuTorch install.
+`EXECUTORCH_BUILD_KERNELS_OPTIMIZED=ON` swaps in vectorized implementations and
+works on existing `.pte` files with no re-export, which makes it sound like the
+easy win. Measured (`results/optimized_kernels.json`):
+
+| model | portable | optimized kernels |
+|---|---|---|
+| resnet18 `forward` | 8262 ms | 8204 ms |
+| mobilenet_v2 `forward` | 1618 ms | 1629 ms |
+| mlp_512x2 `forward` | 2.95 ms | 3.26 ms |
+
+Noise. The optimized set covers elementwise and a few BLAS-backed ops; these
+models spend all their time in convolution, which still falls back to the
+portable implementation. Worth knowing before reaching for it as a fix.
+
+### The XNNPACK delegate — 658×
+
+`EXECUTORCH_BUILD_XNNPACK=ON` plus a re-export through `XnnpackPartitioner`
+hands whole subgraphs to XNNPACK. This needs both a rebuild *and* a re-export —
+the backend has to exist at build time and be targeted at export time, and
+missing either half silently leaves you on portable kernels.
+
+| model | portable `forward` | XNNPACK `forward` | speedup | PyTorch eager |
+|---|---|---|---|---|
+| resnet18 | 8262 ms | **12.56 ms** | 658× | 25.3 ms |
+| mobilenet_v2 | 1618 ms | **3.39 ms** | 477× | 16.7 ms |
+| mlp_1024x4 | 48.6 ms | **0.27 ms** | 178× | 0.30 ms |
+| mnist_cnn | 4.91 ms | **0.26 ms** | 18.6× | 0.29 ms |
+| mlp_512x2 | 3.24 ms | **0.12 ms** | 26.6× | 0.055 ms |
+
+Delegated ExecuTorch is *faster than PyTorch eager* on both vision models —
+2.0× on resnet18, 4.9× on mobilenet_v2 — which is the whole point of an
+ahead-of-time-compiled edge runtime.
+
+`bench/pt_to_pte.py --xnnpack` produces the lowered variant; `run_bench.rb
+--variant xnnpack` benchmarks it.
 
 ### A linker trap worth knowing about
 
 Kernel libraries and backend delegates register themselves from global
 constructors. A plain `-lxnnpack_backend` only pulls in object files that
 resolve some undefined symbol — and a self-registering object resolves nothing,
-so the linker discards it and the registration silently never happens. You
-find out much later, when a model fails to load with a missing-operator or
+so the linker discards it and the registration silently never happens. You find
+out much later, when a model fails to load with a missing-operator or
 missing-backend error.
 
 They have to be whole-archived: `-Wl,--whole-archive` on Linux,
-`-Wl,-force_load` on macOS. The original `extconf.rb` already did this for
-`portable_ops_lib`; it's now generalized so optimized kernels and the XNNPACK
-backend get the same treatment.
+`-Wl,-force_load` on macOS. `extconf.rb` already did this for
+`portable_ops_lib`; it's now generalized to the optimized set and the XNNPACK
+backend.
+
+One constraint that follows: **exactly one operator library may be
+whole-archived.** Each registers the full op set into the same global table, so
+linking two aborts the runtime at init on duplicate registration. `extconf.rb`
+picks `optimized_native_cpu_ops_lib` when present and `portable_ops_lib`
+otherwise; `EXECUTORCH_OPS_LIB` overrides.
+
+---
+
+## Part 3: why the two halves need each other
+
+Neither piece of work looks impressive alone. Together they're the whole story.
+
+On portable kernels, the binding fixes barely move end-to-end time — `forward()`
+is so slow that nothing else is visible. That's exactly why the original
+bindings could carry a 0.6 µs/element conversion cost without anyone noticing.
+
+So the real test is the cross-product: **original bindings, XNNPACK kernels**
+(`results/baseline_xnnpack.json`). Once the math is fast, the boundary is all
+that's left:
+
+| model | e2e | `forward()` | overhead |
+|---|---|---|---|
+| mobilenet_v2 | 107.9 ms | 3.7 ms | **96.6%** |
+| resnet18 | 116.4 ms | 11.7 ms | **90.0%** |
+| mlp_1024x4 | 2.61 ms | 0.30 ms | 88.4% |
+| mnist_cnn | 1.21 ms | 0.25 ms | 79.6% |
+
+96.6% of a mobilenet_v2 call spent not doing inference. Building the input
+tensor alone (102.9 ms) cost **28× more than running the model** (3.7 ms).
+
+With the optimized bindings on the same XNNPACK runtime:
+
+| model | e2e before | e2e after | with `from_bytes` | best speedup |
+|---|---|---|---|---|
+| mobilenet_v2 | 107.9 ms | 12.97 ms | **5.26 ms** | **20.5×** |
+| resnet18 | 116.4 ms | 19.67 ms | **13.69 ms** | **8.5×** |
+| mlp_1024x4 | 2.61 ms | 0.47 ms | **0.38 ms** | **6.9×** |
+| mnist_cnn | 1.21 ms | 0.47 ms | **0.29 ms** | **4.2×** |
+
+The takeaway: **fix the kernels first, because that's the 658×** — but the
+moment you do, the bindings become the bottleneck, and on mobilenet_v2 they're
+worth another 20×.
+
+It also changes which API matters. On a fast runtime, `Tensor.from_bytes` isn't
+a micro-optimization: for mobilenet_v2 it's the difference between spending
+7.6 ms or 0.85 ms getting the input across, against a 3.4 ms inference.
 
 ---
 
 ## Notes for reproducing
 
-The `forward()` numbers here come from a portable-kernel build, so they are
-*not* a fair "ExecuTorch vs PyTorch" comparison — they're a fair "the gem's
-default build vs PyTorch" comparison, which is the number a user actually
-experiences. Rebuild with optimized kernels or XNNPACK and re-run
-`bench/run_bench.rb` to see where a tuned build lands.
+Four result files, the full cross-product:
 
-The eager PyTorch timings recorded in each `.meta.json` were measured while the
-machine was otherwise busy in some runs; regenerate the models on an idle
-machine if you want to lean on them.
+| file | bindings | kernels |
+|---|---|---|
+| `baseline.json` | original | portable |
+| `optimized.json` | optimized | portable |
+| `optimized_kernels.json` | optimized | optimized CPU kernels |
+| `baseline_xnnpack.json` | original | XNNPACK |
+| `xnnpack.json` | optimized | XNNPACK |
+
+```bash
+bundle exec ruby bench/compare.rb bench/results/baseline_xnnpack.json bench/results/xnnpack.json
+```
+
+The eager PyTorch timings recorded in each `.meta.json` were measured on the
+same machine but not under controlled conditions (some runs overlapped a
+compile). Treat them as an anchor, not a benchmark; regenerate the models on an
+idle machine if you want to lean on them.
