@@ -103,7 +103,11 @@ def build(name, out_dir):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--models", nargs="*", help="model names (default: the standard set)")
+    ap.add_argument(
+        "--models",
+        nargs="*",
+        help="model names, space- or comma-separated (default: the standard set)",
+    )
     ap.add_argument("--all", action="store_true", help="build every registered model")
     ap.add_argument("--out", default=MODELS_DIR)
     args = ap.parse_args()
@@ -111,7 +115,7 @@ def main():
     if args.all:
         names = list(bench_models.REGISTRY)
     elif args.models:
-        names = args.models
+        names = [n for arg in args.models for n in arg.split(",") if n]
     else:
         names = bench_models.DEFAULT_MODELS
 
