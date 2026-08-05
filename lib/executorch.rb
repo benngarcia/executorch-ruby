@@ -41,6 +41,25 @@ module Executorch
         create(flat_data, shape, dtype)
       end
 
+      # Build a tensor from packed binary data, skipping per-element conversion.
+      #
+      # Every other constructor walks the Array and converts each element
+      # individually. This one hands the runtime a buffer to memcpy, which is
+      # dramatically faster once tensors get large -- worth it whenever the data
+      # is already bytes (an image decoded to a string, a file, a socket) or
+      # when you can pack it once and reuse it.
+      #
+      # Data must be native-endian and match the element width of dtype:
+      # :float => "f*", :double => "d*", :int => "l*", :long => "q*".
+      #
+      # @example
+      #   bytes = pixels.pack("f*")
+      #   Executorch::Tensor.from_bytes(bytes, shape: [1, 3, 224, 224])
+      #
+      def from_bytes(data, shape:, dtype: :float)
+        from_binary(data, shape, dtype)
+      end
+
       private
 
       # Infer the shape from a nested array structure
@@ -58,60 +77,50 @@ module Executorch
           current = current.first
         end
 
-        # Validate that all elements at each level have consistent sizes
-        validate_shape(data, shape, 0)
-
         shape
       end
 
-      # Validate that the array has consistent shape at all levels
-      # @param data [Array] The data to validate
-      # @param expected_shape [Array<Integer>] The expected shape
-      # @param depth [Integer] Current depth in the array
-      # @raise [ArgumentError] If the array is jagged or inconsistent
-      def validate_shape(data, expected_shape, depth)
-        return if depth >= expected_shape.size
-        return if expected_shape[depth] == 0
-
-        unless data.is_a?(Array)
-          raise ArgumentError, "Inconsistent nesting depth at level #{depth}: expected Array, got #{data.class}"
-        end
-
-        unless data.size == expected_shape[depth]
-          raise ArgumentError, "Jagged array at depth #{depth}: expected size #{expected_shape[depth]}, got #{data.size}"
-        end
-
-        data.each_with_index do |element, i|
-          if depth + 1 < expected_shape.size
-            # Expect more nesting
-            unless element.is_a?(Array)
-              raise ArgumentError, "Inconsistent nesting at depth #{depth}, index #{i}: expected Array, got #{element.class}"
-            end
-            validate_shape(element, expected_shape, depth + 1)
-          else
-            # At leaf level, should be numeric
-            if element.is_a?(Array)
-              raise ArgumentError, "Inconsistent nesting at depth #{depth}, index #{i}: unexpected Array at leaf level"
-            end
-          end
-        end
-      end
-
-      # Flatten a nested array into a 1D array
+      # Flatten a nested array into a 1D array, validating its structure on the
+      # way down.
+      #
       # @param data [Array] Potentially nested array
-      # @param shape [Array<Integer>] The shape (used to handle empty arrays)
+      # @param shape [Array<Integer>] The shape inferred from the first branch
       # @return [Array] Flat array
+      # @raise [ArgumentError] If the array is jagged or inconsistently nested
       def flatten_nested(data, shape)
         return [] if shape.include?(0)
-        deep_flatten(data)
-      end
 
-      # Recursively flatten an array
-      # @param data [Array, Numeric] The data to flatten
-      # @return [Array] Flat array
-      def deep_flatten(data)
-        return [data] unless data.is_a?(Array)
-        data.flat_map { |element| deep_flatten(element) }
+        # Walk one whole level at a time rather than recursing per element: at
+        # depth k every node must be an Array of exactly shape[k] entries, and
+        # Array#concat gathers the next level in C. The recursive flat_map this
+        # replaces allocated an intermediate Array for *every leaf*, which on a
+        # 150k-element input meant 150k throwaway objects before a single
+        # number crossed into C++.
+        level = [data]
+        shape.each_with_index do |dim, depth|
+          nxt = []
+          level.each do |node|
+            unless node.is_a?(Array)
+              raise ArgumentError,
+                    "Inconsistent nesting depth at level #{depth}: expected Array, got #{node.class}"
+            end
+            unless node.size == dim
+              raise ArgumentError,
+                    "Jagged array at depth #{depth}: expected size #{dim}, got #{node.size}"
+            end
+            nxt.concat(node)
+          end
+          level = nxt
+        end
+
+        # `level` now holds what should be the leaves. If any branch nested
+        # deeper than the shape says, flattening changes the element count.
+        unless level.flatten.size == level.size
+          raise ArgumentError,
+                "Inconsistent nesting: some elements nest deeper than shape #{shape.inspect}"
+        end
+
+        level
       end
     end
 

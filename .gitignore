@@ -33,3 +33,9 @@ test/support/models/*.pte
 
 # Coverage
 /coverage/
+
+# Benchmark artifacts (regenerate with bench/make_pt_models.py + bench/pt_to_pte.py)
+/bench/models/
+/bench/results/*.json
+!/bench/results/baseline.json
+!/bench/results/optimized.json

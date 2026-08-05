@@ -13,6 +13,7 @@
 #include <executorch/runtime/core/evalue.h>
 #include <executorch/runtime/core/exec_aten/exec_aten.h>
 
+#include <cstring>
 #include <memory>
 #include <vector>
 #include <string>
@@ -41,69 +42,83 @@ public:
   static RubyTensor create(Array data, Array shape, Symbol dtype) {
     HANDLE_ET_ERRORS
 
-    // Convert shape to vector using the proper SizesType
-    std::vector<et::aten::SizesType> sizes;
-    for (size_t i = 0; i < shape.size(); i++) {
-      sizes.push_back(static_cast<et::aten::SizesType>(
-        detail::From_Ruby<int64_t>().convert(shape[i].value())));
-    }
-
-    // Get scalar type from symbol
+    std::vector<et::aten::SizesType> sizes = read_sizes(shape.value());
     et::aten::ScalarType scalar_type = executorch_ruby::symbol_to_scalar_type(dtype.value());
 
-    // Convert data based on dtype and create tensor using templated make_tensor_ptr
-    // The templated version takes ownership of the data vector and handles memory management
-    if (scalar_type == et::aten::ScalarType::Float) {
-      std::vector<float> float_data;
-      float_data.reserve(data.size());
-      for (size_t i = 0; i < data.size(); i++) {
-        float_data.push_back(static_cast<float>(detail::From_Ruby<double>().convert(data[i].value())));
-      }
-      // Use templated make_tensor_ptr which manages data ownership
-      TensorPtr tensor_ptr = make_tensor_ptr<float>(
-        std::move(sizes),
-        std::move(float_data)
-      );
-      return RubyTensor(std::move(tensor_ptr));
-    } else if (scalar_type == et::aten::ScalarType::Double) {
-      std::vector<double> double_data;
-      double_data.reserve(data.size());
-      for (size_t i = 0; i < data.size(); i++) {
-        double_data.push_back(detail::From_Ruby<double>().convert(data[i].value()));
-      }
-      TensorPtr tensor_ptr = make_tensor_ptr<double>(
-        std::move(sizes),
-        std::move(double_data)
-      );
-      return RubyTensor(std::move(tensor_ptr));
-    } else if (scalar_type == et::aten::ScalarType::Long) {
-      std::vector<int64_t> int_data;
-      int_data.reserve(data.size());
-      for (size_t i = 0; i < data.size(); i++) {
-        int_data.push_back(detail::From_Ruby<int64_t>().convert(data[i].value()));
-      }
-      TensorPtr tensor_ptr = make_tensor_ptr<int64_t>(
-        std::move(sizes),
-        std::move(int_data)
-      );
-      return RubyTensor(std::move(tensor_ptr));
-    } else if (scalar_type == et::aten::ScalarType::Int) {
-      std::vector<int32_t> int_data;
-      int_data.reserve(data.size());
-      for (size_t i = 0; i < data.size(); i++) {
-        int_data.push_back(static_cast<int32_t>(detail::From_Ruby<int64_t>().convert(data[i].value())));
-      }
-      TensorPtr tensor_ptr = make_tensor_ptr<int32_t>(
-        std::move(sizes),
-        std::move(int_data)
-      );
-      return RubyTensor(std::move(tensor_ptr));
-    } else {
-      rb_raise(rb_eArgError, "Unsupported dtype. Use :float, :double, :long, or :int");
+    // make_tensor_ptr takes ownership of the data vector, so each branch fills
+    // one and moves it in.
+    VALUE ary = data.value();
+    Check_Type(ary, T_ARRAY);
+
+    switch (scalar_type) {
+      case et::aten::ScalarType::Float:
+        return RubyTensor(make_tensor_ptr<float>(
+          std::move(sizes),
+          executorch_ruby::read_array<float>(ary, executorch_ruby::to_double_fast)));
+      case et::aten::ScalarType::Double:
+        return RubyTensor(make_tensor_ptr<double>(
+          std::move(sizes),
+          executorch_ruby::read_array<double>(ary, executorch_ruby::to_double_fast)));
+      case et::aten::ScalarType::Long:
+        return RubyTensor(make_tensor_ptr<int64_t>(
+          std::move(sizes),
+          executorch_ruby::read_array<int64_t>(ary, executorch_ruby::to_int64_fast)));
+      case et::aten::ScalarType::Int:
+        return RubyTensor(make_tensor_ptr<int32_t>(
+          std::move(sizes),
+          executorch_ruby::read_array<int32_t>(ary, executorch_ruby::to_int64_fast)));
+      default:
+        rb_raise(rb_eArgError, "Unsupported dtype. Use :float, :double, :long, or :int");
     }
 
     // Should never reach here but compiler needs it
     rb_raise(rb_eRuntimeError, "Unexpected code path in Tensor.create");
+    END_HANDLE_ET_ERRORS
+  }
+
+  // Create a tensor by copying raw bytes straight into the backing buffer.
+  //
+  // This is the escape hatch from per-element conversion: Ruby packs the data
+  // once (Array#pack, or bytes read from a file/socket) and the whole tensor
+  // arrives as one memcpy instead of numel boxed-number conversions. Bytes are
+  // native-endian and must match the element width of `dtype` exactly.
+  static RubyTensor from_binary(String data, Array shape, Symbol dtype) {
+    HANDLE_ET_ERRORS
+
+    std::vector<et::aten::SizesType> sizes = read_sizes(shape.value());
+    et::aten::ScalarType scalar_type = executorch_ruby::symbol_to_scalar_type(dtype.value());
+    const size_t item_size = executorch_ruby::element_size(scalar_type);
+
+    int64_t numel = 1;
+    for (auto size : sizes) {
+      numel *= size;
+    }
+
+    VALUE str = data.value();
+    Check_Type(str, T_STRING);
+    const size_t expected = static_cast<size_t>(numel) * item_size;
+    const size_t actual = static_cast<size_t>(RSTRING_LEN(str));
+    if (actual != expected) {
+      rb_raise(rb_eArgError,
+               "Binary data is %zu bytes but shape %lld x %zu bytes requires %zu",
+               actual, static_cast<long long>(numel), item_size, expected);
+    }
+
+    const char* bytes = RSTRING_PTR(str);
+    switch (scalar_type) {
+      case et::aten::ScalarType::Float:
+        return RubyTensor(make_tensor_ptr<float>(std::move(sizes), copy_bytes<float>(bytes, numel)));
+      case et::aten::ScalarType::Double:
+        return RubyTensor(make_tensor_ptr<double>(std::move(sizes), copy_bytes<double>(bytes, numel)));
+      case et::aten::ScalarType::Long:
+        return RubyTensor(make_tensor_ptr<int64_t>(std::move(sizes), copy_bytes<int64_t>(bytes, numel)));
+      case et::aten::ScalarType::Int:
+        return RubyTensor(make_tensor_ptr<int32_t>(std::move(sizes), copy_bytes<int32_t>(bytes, numel)));
+      default:
+        rb_raise(rb_eArgError, "Unsupported dtype. Use :float, :double, :long, or :int");
+    }
+
+    rb_raise(rb_eRuntimeError, "Unexpected code path in Tensor.from_binary");
     END_HANDLE_ET_ERRORS
   }
 
@@ -138,34 +153,39 @@ public:
 
   // Convert tensor data to Ruby array (flattened)
   Array to_a() const {
-    Array result;
+    const int64_t n = tensor_ptr_->numel();
     auto scalar_type = tensor_ptr_->scalar_type();
 
-    if (scalar_type == et::aten::ScalarType::Float) {
-      const float* data = tensor_ptr_->const_data_ptr<float>();
-      for (int64_t i = 0; i < tensor_ptr_->numel(); i++) {
-        result.push(data[i]);
-      }
-    } else if (scalar_type == et::aten::ScalarType::Double) {
-      const double* data = tensor_ptr_->const_data_ptr<double>();
-      for (int64_t i = 0; i < tensor_ptr_->numel(); i++) {
-        result.push(data[i]);
-      }
-    } else if (scalar_type == et::aten::ScalarType::Long) {
-      const int64_t* data = tensor_ptr_->const_data_ptr<int64_t>();
-      for (int64_t i = 0; i < tensor_ptr_->numel(); i++) {
-        result.push(data[i]);
-      }
-    } else if (scalar_type == et::aten::ScalarType::Int) {
-      const int32_t* data = tensor_ptr_->const_data_ptr<int32_t>();
-      for (int64_t i = 0; i < tensor_ptr_->numel(); i++) {
-        result.push(static_cast<int64_t>(data[i]));
-      }
-    } else {
-      rb_raise(rb_eRuntimeError, "Unsupported tensor dtype for to_a");
+    switch (scalar_type) {
+      case et::aten::ScalarType::Float:
+        return Array(executorch_ruby::build_array(
+          tensor_ptr_->const_data_ptr<float>(), n,
+          [](float v) { return DBL2NUM(static_cast<double>(v)); }));
+      case et::aten::ScalarType::Double:
+        return Array(executorch_ruby::build_array(
+          tensor_ptr_->const_data_ptr<double>(), n,
+          [](double v) { return DBL2NUM(v); }));
+      case et::aten::ScalarType::Long:
+        return Array(executorch_ruby::build_array(
+          tensor_ptr_->const_data_ptr<int64_t>(), n,
+          [](int64_t v) { return LL2NUM(v); }));
+      case et::aten::ScalarType::Int:
+        return Array(executorch_ruby::build_array(
+          tensor_ptr_->const_data_ptr<int32_t>(), n,
+          [](int32_t v) { return LONG2NUM(static_cast<long>(v)); }));
+      default:
+        rb_raise(rb_eRuntimeError, "Unsupported tensor dtype for to_a");
     }
+  }
 
-    return result;
+  // Copy the tensor's buffer out as a binary String, native-endian.
+  // The mirror of from_binary: unpack it in Ruby, or hand it straight to
+  // whatever wants bytes.
+  String to_binary() const {
+    const size_t nbytes = static_cast<size_t>(tensor_ptr_->numel()) *
+                          executorch_ruby::element_size(tensor_ptr_->scalar_type());
+    return String(rb_str_new(
+      static_cast<const char*>(tensor_ptr_->const_data_ptr()), static_cast<long>(nbytes)));
   }
 
   // Get string representation
@@ -204,6 +224,25 @@ public:
   }
 
 private:
+  static std::vector<et::aten::SizesType> read_sizes(VALUE shape) {
+    Check_Type(shape, T_ARRAY);
+    const long dims = RARRAY_LEN(shape);
+    std::vector<et::aten::SizesType> sizes;
+    sizes.reserve(static_cast<size_t>(dims));
+    for (long i = 0; i < dims; i++) {
+      sizes.push_back(static_cast<et::aten::SizesType>(
+        executorch_ruby::to_int64_fast(RARRAY_AREF(shape, i))));
+    }
+    return sizes;
+  }
+
+  template <typename T>
+  static std::vector<T> copy_bytes(const char* bytes, int64_t numel) {
+    std::vector<T> out(static_cast<size_t>(numel));
+    std::memcpy(out.data(), bytes, static_cast<size_t>(numel) * sizeof(T));
+    return out;
+  }
+
   TensorPtr tensor_ptr_;
 };
 
@@ -382,90 +421,20 @@ public:
     if (!module_->is_method_loaded("forward")) {
       auto load_err = module_->load_method("forward");
       if (load_err != executorch::runtime::Error::Ok) {
-        const char* load_error_name = "Unknown";
-        switch (load_err) {
-          case executorch::runtime::Error::Ok: load_error_name = "Ok"; break;
-          case executorch::runtime::Error::Internal: load_error_name = "Internal"; break;
-          case executorch::runtime::Error::InvalidState: load_error_name = "InvalidState"; break;
-          case executorch::runtime::Error::InvalidArgument: load_error_name = "InvalidArgument"; break;
-          case executorch::runtime::Error::InvalidType: load_error_name = "InvalidType"; break;
-          case executorch::runtime::Error::NotFound: load_error_name = "NotFound"; break;
-          case executorch::runtime::Error::MemoryAllocationFailed: load_error_name = "MemoryAllocationFailed"; break;
-          case executorch::runtime::Error::AccessFailed: load_error_name = "AccessFailed"; break;
-          case executorch::runtime::Error::NotSupported: load_error_name = "NotSupported"; break;
-          default: load_error_name = "Unknown"; break;
-        }
-        rb_raise(rb_eRuntimeError, "Failed to load forward method: %s (%d)", load_error_name, static_cast<int>(load_err));
+        rb_raise(rb_eRuntimeError, "Failed to load forward method: %s",
+                 executorch_ruby::error_name(load_err));
       }
     }
 
-    // Convert Ruby inputs to EValues
-    // Keep tensors alive during forward execution
-    std::vector<TensorPtr> input_tensors;
-    std::vector<EValue> input_evalues;
+    build_inputs(inputs);
 
-    for (size_t i = 0; i < inputs.size(); i++) {
-      Object input = inputs[i];
-
-      // Check if it's a RubyTensor
-      if (input.is_a(rb_cObject)) {
-        try {
-          RubyTensor& tensor = detail::From_Ruby<RubyTensor&>().convert(input.value());
-          // Clone the tensor to ensure we own the data during forward
-          TensorPtr cloned = clone_tensor_ptr(tensor.get());
-          input_tensors.push_back(cloned);
-          input_evalues.push_back(EValue(*cloned));
-        } catch (...) {
-          // Try as RubyEValue
-          try {
-            RubyEValue& evalue = detail::From_Ruby<RubyEValue&>().convert(input.value());
-            input_evalues.push_back(evalue.get());
-          } catch (...) {
-            rb_raise(rb_eTypeError, "Input %zu must be a Tensor or EValue", i);
-          }
-        }
-      }
-    }
-
-    // Execute forward
-    auto result = module_->forward(input_evalues);
+    auto result = module_->forward(input_evalues_);
     if (!result.ok()) {
-      auto error = result.error();
-      const char* error_name = "Unknown";
-      switch (error) {
-        case executorch::runtime::Error::Ok: error_name = "Ok"; break;
-        case executorch::runtime::Error::Internal: error_name = "Internal"; break;
-        case executorch::runtime::Error::InvalidState: error_name = "InvalidState"; break;
-        case executorch::runtime::Error::InvalidArgument: error_name = "InvalidArgument"; break;
-        case executorch::runtime::Error::InvalidType: error_name = "InvalidType"; break;
-        case executorch::runtime::Error::NotFound: error_name = "NotFound"; break;
-        case executorch::runtime::Error::MemoryAllocationFailed: error_name = "MemoryAllocationFailed"; break;
-        case executorch::runtime::Error::AccessFailed: error_name = "AccessFailed"; break;
-        case executorch::runtime::Error::NotSupported: error_name = "NotSupported"; break;
-        default: error_name = "Unknown"; break;
-      }
-      rb_raise(rb_eRuntimeError, "Forward execution failed: %s (%d)", error_name, static_cast<int>(error));
-    }
-    auto outputs = std::move(result.get());
-
-    // Convert outputs to Ruby array of RubyTensors
-    Array ruby_outputs;
-    for (auto& output : outputs) {
-      if (output.isTensor()) {
-        // Clone the tensor to own the data
-        ruby_outputs.push(RubyTensor::from_tensor(output.toTensor()));
-      } else if (output.isInt()) {
-        ruby_outputs.push(output.toInt());
-      } else if (output.isDouble()) {
-        ruby_outputs.push(output.toDouble());
-      } else if (output.isBool()) {
-        ruby_outputs.push(output.toBool() ? Qtrue : Qfalse);
-      } else {
-        ruby_outputs.push(Qnil);
-      }
+      rb_raise(rb_eRuntimeError, "Forward execution failed: %s",
+               executorch_ruby::error_name(result.error()));
     }
 
-    return ruby_outputs;
+    return wrap_outputs(result.get());
     END_HANDLE_ET_ERRORS
   }
 
@@ -476,50 +445,15 @@ public:
       rb_raise(rb_eRuntimeError, "Module not loaded");
     }
 
-    // Convert Ruby inputs to EValues
-    // Keep tensors alive during execution
-    std::vector<TensorPtr> input_tensors;
-    std::vector<EValue> input_evalues;
-    for (size_t i = 0; i < inputs.size(); i++) {
-      Object input = inputs[i];
+    build_inputs(inputs);
 
-      try {
-        RubyTensor& tensor = detail::From_Ruby<RubyTensor&>().convert(input.value());
-        // Clone the tensor to ensure we own the data during execution
-        TensorPtr cloned = clone_tensor_ptr(tensor.get());
-        input_tensors.push_back(cloned);
-        input_evalues.push_back(EValue(*cloned));
-      } catch (...) {
-        try {
-          RubyEValue& evalue = detail::From_Ruby<RubyEValue&>().convert(input.value());
-          input_evalues.push_back(evalue.get());
-        } catch (...) {
-          rb_raise(rb_eTypeError, "Input %zu must be a Tensor or EValue", i);
-        }
-      }
+    auto result = module_->execute(method_name, input_evalues_);
+    if (!result.ok()) {
+      rb_raise(rb_eRuntimeError, "Execution of '%s' failed: %s", method_name.c_str(),
+               executorch_ruby::error_name(result.error()));
     }
 
-    // Execute method
-    auto result = module_->execute(method_name, input_evalues);
-    auto outputs = executorch_ruby::unwrap_result(std::move(result));
-
-    // Convert outputs to Ruby
-    Array ruby_outputs;
-    for (auto& output : outputs) {
-      if (output.isTensor()) {
-        ruby_outputs.push(RubyTensor::from_tensor(output.toTensor()));
-      } else if (output.isInt()) {
-        ruby_outputs.push(output.toInt());
-      } else if (output.isDouble()) {
-        ruby_outputs.push(output.toDouble());
-      } else if (output.isBool()) {
-        ruby_outputs.push(output.toBool() ? Qtrue : Qfalse);
-      } else {
-        ruby_outputs.push(Qnil);
-      }
-    }
-
-    return ruby_outputs;
+    return wrap_outputs(result.get());
     END_HANDLE_ET_ERRORS
   }
 
@@ -534,8 +468,68 @@ public:
   }
 
 private:
+  // Turn the Ruby argument array into the EValue vector the runtime wants.
+  //
+  // Two things worth noting:
+  //
+  // * The input tensors are used in place rather than cloned. The old code
+  //   deep-copied every input on every call to "own the data during forward",
+  //   but the caller's Array holds a live reference to each Tensor for the
+  //   whole call, so the buffer cannot be collected underneath us -- the copy
+  //   bought nothing and cost a full pass over the input.
+  // * Dispatch is by type check, not by catching the exception Rice throws on a
+  //   failed conversion. Throwing and unwinding to identify a type costs more
+  //   than a small model's entire inference.
+  void build_inputs(Array& inputs) {
+    VALUE ary = inputs.value();
+    Check_Type(ary, T_ARRAY);
+    const long n = RARRAY_LEN(ary);
+
+    input_evalues_.clear();
+    input_evalues_.reserve(static_cast<size_t>(n));
+
+    for (long i = 0; i < n; i++) {
+      VALUE item = RARRAY_AREF(ary, i);
+
+      if (Data_Type<RubyTensor>::is_descendant(item)) {
+        RubyTensor* tensor = detail::unwrap<RubyTensor>(
+          item, Data_Type<RubyTensor>::ruby_data_type(), false);
+        input_evalues_.push_back(EValue(tensor->get()));
+      } else if (Data_Type<RubyEValue>::is_descendant(item)) {
+        RubyEValue* evalue = detail::unwrap<RubyEValue>(
+          item, Data_Type<RubyEValue>::ruby_data_type(), false);
+        input_evalues_.push_back(evalue->get());
+      } else {
+        rb_raise(rb_eTypeError, "Input %ld must be a Tensor or EValue", i);
+      }
+    }
+  }
+
+  // Outputs *are* cloned: they point into the method's planned memory arena,
+  // which the next call overwrites.
+  template <typename Outputs_T>
+  Array wrap_outputs(Outputs_T& outputs) {
+    VALUE ruby_outputs = rb_ary_new_capa(static_cast<long>(outputs.size()));
+    for (auto& output : outputs) {
+      if (output.isTensor()) {
+        rb_ary_push(ruby_outputs,
+                    detail::To_Ruby<RubyTensor>().convert(RubyTensor::from_tensor(output.toTensor())));
+      } else if (output.isInt()) {
+        rb_ary_push(ruby_outputs, LL2NUM(output.toInt()));
+      } else if (output.isDouble()) {
+        rb_ary_push(ruby_outputs, DBL2NUM(output.toDouble()));
+      } else if (output.isBool()) {
+        rb_ary_push(ruby_outputs, output.toBool() ? Qtrue : Qfalse);
+      } else {
+        rb_ary_push(ruby_outputs, Qnil);
+      }
+    }
+    return Array(ruby_outputs);
+  }
+
   std::string path_;
   std::unique_ptr<et::extension::Module> module_;
+  std::vector<EValue> input_evalues_;  // reused across calls to avoid churn
 };
 
 /**
@@ -558,6 +552,9 @@ void Init_executorch() {
       Arg("data"), Arg("shape"), Arg("dtype"))
     .define_singleton_function("from_array", &RubyTensor::from_array,
       Arg("data"), Arg("shape"))
+    .define_singleton_function("from_binary", &RubyTensor::from_binary,
+      Arg("data"), Arg("shape"), Arg("dtype"))
+    .define_method("to_binary", &RubyTensor::to_binary)
     .define_method("shape", &RubyTensor::shape)
     .define_method("dim", &RubyTensor::dim)
     .define_method("numel", &RubyTensor::numel)

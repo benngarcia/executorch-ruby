@@ -1,0 +1,537 @@
+{
+  "label": "baseline",
+  "ruby": "3.3.6",
+  "models": {
+    "add_mul": {
+      "regime": "overhead",
+      "input_shape": [
+        1,
+        3
+      ],
+      "output_shape": [
+        1,
+        3
+      ],
+      "params": 0,
+      "eager_p50_ms": 0.0145,
+      "eval": {
+        "passed": true,
+        "max_abs_error": 0.0,
+        "tolerance": 0.0001
+      },
+      "phases": {
+        "tensor_new_flat": {
+          "p50_ms": 0.02076880000458914,
+          "p90_ms": 0.02408510000577735,
+          "min_ms": 0.01926800000546791,
+          "mean_ms": 0.021781460000966032,
+          "allocs_per_call": 1.1,
+          "batch": 10,
+          "samples": 25
+        },
+        "tensor_new_nested": {
+          "p50_ms": 0.02636199999667749,
+          "p90_ms": 0.031727000002016816,
+          "min_ms": 0.02446344444706483,
+          "mean_ms": 0.027857608889058205,
+          "allocs_per_call": 13.0,
+          "batch": 9,
+          "samples": 25
+        },
+        "forward": {
+          "p50_ms": 0.01911862500492134,
+          "p90_ms": 0.026002749990539087,
+          "min_ms": 0.01811824999720102,
+          "mean_ms": 0.020677174999264025,
+          "allocs_per_call": 3.0,
+          "batch": 8,
+          "samples": 25
+        },
+        "to_a_flat": {
+          "p50_ms": 0.006522160001622979,
+          "p90_ms": 0.009024400001180766,
+          "min_ms": 0.006193720000737812,
+          "mean_ms": 0.007270512000104645,
+          "allocs_per_call": 1.0,
+          "batch": 25,
+          "samples": 25
+        },
+        "to_a_nested": {
+          "p50_ms": 0.01233957142890826,
+          "p90_ms": 0.016678428583613174,
+          "min_ms": 0.012170571429643522,
+          "mean_ms": 0.013376588570801169,
+          "allocs_per_call": 6.0,
+          "batch": 7,
+          "samples": 25
+        },
+        "e2e": {
+          "p50_ms": 0.06959199998846088,
+          "p90_ms": 0.09470724998550395,
+          "min_ms": 0.0642697499984024,
+          "mean_ms": 0.07619806999514367,
+          "allocs_per_call": 10.0,
+          "batch": 4,
+          "samples": 25
+        }
+      },
+      "binding_overhead_pct": 72.5
+    },
+    "mlp_1024x4": {
+      "regime": "compute",
+      "input_shape": [
+        1,
+        1024
+      ],
+      "output_shape": [
+        1,
+        1024
+      ],
+      "params": 4198400,
+      "eager_p50_ms": 0.3041,
+      "eval": {
+        "passed": true,
+        "max_abs_error": 1.1920928955078125e-07,
+        "tolerance": 0.0001
+      },
+      "phases": {
+        "tensor_new_flat": {
+          "p50_ms": 0.652993000016977,
+          "p90_ms": 0.7002090000014505,
+          "min_ms": 0.6268390000059298,
+          "mean_ms": 0.6580987199959054,
+          "allocs_per_call": 1.0,
+          "batch": 1,
+          "samples": 25
+        },
+        "tensor_new_nested": {
+          "p50_ms": 0.9236140000439264,
+          "p90_ms": 1.0335790000226552,
+          "min_ms": 0.8889450000424404,
+          "mean_ms": 0.9757094000042343,
+          "allocs_per_call": 1034.0,
+          "batch": 1,
+          "samples": 25
+        },
+        "forward": {
+          "p50_ms": 48.63811699999587,
+          "p90_ms": 53.011588999993364,
+          "min_ms": 44.01434200008225,
+          "mean_ms": 48.45398396001201,
+          "allocs_per_call": 3.0,
+          "batch": 1,
+          "samples": 25
+        },
+        "to_a_flat": {
+          "p50_ms": 1.1307360000500921,
+          "p90_ms": 1.1827119999452407,
+          "min_ms": 1.0720290000563182,
+          "mean_ms": 1.134630680016926,
+          "allocs_per_call": 1.0,
+          "batch": 1,
+          "samples": 25
+        },
+        "to_a_nested": {
+          "p50_ms": 1.1739120000129333,
+          "p90_ms": 1.2208489999920857,
+          "min_ms": 1.1140029999978651,
+          "mean_ms": 1.172578240002622,
+          "allocs_per_call": 7.0,
+          "batch": 1,
+          "samples": 25
+        },
+        "e2e": {
+          "p50_ms": 58.81534600007399,
+          "p90_ms": 69.10078999999314,
+          "min_ms": 51.90361200004645,
+          "mean_ms": 59.92618367999512,
+          "allocs_per_call": 11.0,
+          "batch": 1,
+          "samples": 25
+        }
+      },
+      "binding_overhead_pct": 17.3
+    },
+    "mlp_512x2": {
+      "regime": "mixed",
+      "input_shape": [
+        1,
+        512
+      ],
+      "output_shape": [
+        1,
+        512
+      ],
+      "params": 525312,
+      "eager_p50_ms": 0.0553,
+      "eval": {
+        "passed": true,
+        "max_abs_error": 4.172325134277344e-07,
+        "tolerance": 0.0001
+      },
+      "phases": {
+        "tensor_new_flat": {
+          "p50_ms": 0.34645499999896856,
+          "p90_ms": 0.3912410000452837,
+          "min_ms": 0.32401049998043163,
+          "mean_ms": 0.3620703000001413,
+          "allocs_per_call": 1.0,
+          "batch": 2,
+          "samples": 25
+        },
+        "tensor_new_nested": {
+          "p50_ms": 0.49753500002225337,
+          "p90_ms": 0.5484034999767573,
+          "min_ms": 0.45937499999126885,
+          "mean_ms": 0.5244627600018248,
+          "allocs_per_call": 522.0,
+          "batch": 2,
+          "samples": 25
+        },
+        "forward": {
+          "p50_ms": 3.2381769999574317,
+          "p90_ms": 3.56931099997837,
+          "min_ms": 3.032615000051919,
+          "mean_ms": 3.300494080003773,
+          "allocs_per_call": 3.0,
+          "batch": 1,
+          "samples": 25
+        },
+        "to_a_flat": {
+          "p50_ms": 0.5557749999525186,
+          "p90_ms": 0.5889049999723284,
+          "min_ms": 0.5291100000022197,
+          "mean_ms": 0.560937239984014,
+          "allocs_per_call": 1.0,
+          "batch": 1,
+          "samples": 25
+        },
+        "to_a_nested": {
+          "p50_ms": 0.5679810000174257,
+          "p90_ms": 0.6180100000392486,
+          "min_ms": 0.5304489999389261,
+          "mean_ms": 0.5747456800054351,
+          "allocs_per_call": 7.0,
+          "batch": 1,
+          "samples": 25
+        },
+        "e2e": {
+          "p50_ms": 4.224286999942706,
+          "p90_ms": 4.950387999997474,
+          "min_ms": 4.020548999960738,
+          "mean_ms": 4.363867159986512,
+          "allocs_per_call": 11.0,
+          "batch": 1,
+          "samples": 25
+        }
+      },
+      "binding_overhead_pct": 23.3
+    },
+    "mnist_cnn": {
+      "regime": "mixed",
+      "input_shape": [
+        1,
+        1,
+        28,
+        28
+      ],
+      "output_shape": [
+        1,
+        10
+      ],
+      "params": 20490,
+      "eager_p50_ms": 0.2853,
+      "eval": {
+        "passed": true,
+        "max_abs_error": 2.1979212760925293e-07,
+        "tolerance": 0.0001
+      },
+      "phases": {
+        "tensor_new_flat": {
+          "p50_ms": 0.5717129999993631,
+          "p90_ms": 0.9584560000348574,
+          "min_ms": 0.49598900000091817,
+          "mean_ms": 0.6628527199973178,
+          "allocs_per_call": 1.0,
+          "batch": 1,
+          "samples": 25
+        },
+        "tensor_new_nested": {
+          "p50_ms": 0.7665200000701589,
+          "p90_ms": 0.9408979999534495,
+          "min_ms": 0.7177969999929701,
+          "mean_ms": 0.8202253999888853,
+          "allocs_per_call": 910.0,
+          "batch": 1,
+          "samples": 25
+        },
+        "forward": {
+          "p50_ms": 4.907056999968518,
+          "p90_ms": 5.1328480000165655,
+          "min_ms": 4.7372840000434735,
+          "mean_ms": 4.980831200005014,
+          "allocs_per_call": 3.0,
+          "batch": 1,
+          "samples": 25
+        },
+        "to_a_flat": {
+          "p50_ms": 0.015250117645765011,
+          "p90_ms": 0.01774576470752971,
+          "min_ms": 0.013802764710014933,
+          "mean_ms": 0.015397437646777904,
+          "allocs_per_call": 1.0,
+          "batch": 17,
+          "samples": 25
+        },
+        "to_a_nested": {
+          "p50_ms": 0.02176472726618654,
+          "p90_ms": 0.03172154544534517,
+          "min_ms": 0.019480454542727704,
+          "mean_ms": 0.02458076727180014,
+          "allocs_per_call": 7.0,
+          "batch": 11,
+          "samples": 25
+        },
+        "e2e": {
+          "p50_ms": 5.492608000054133,
+          "p90_ms": 5.707145000087621,
+          "min_ms": 5.386334999911924,
+          "mean_ms": 5.60199628000646,
+          "allocs_per_call": 11.0,
+          "batch": 1,
+          "samples": 25
+        }
+      },
+      "binding_overhead_pct": 10.7
+    },
+    "mobilenet_v2": {
+      "regime": "compute",
+      "input_shape": [
+        1,
+        3,
+        224,
+        224
+      ],
+      "output_shape": [
+        1,
+        1000
+      ],
+      "params": 3504872,
+      "eager_p50_ms": 16.7216,
+      "eval": {
+        "passed": true,
+        "max_abs_error": 3.552713678800501e-15,
+        "tolerance": 0.0001
+      },
+      "phases": {
+        "tensor_new_flat": {
+          "p50_ms": 92.12486700005229,
+          "p90_ms": 96.08018500000526,
+          "min_ms": 91.18256399995062,
+          "mean_ms": 93.3415714000148,
+          "allocs_per_call": 1.0,
+          "batch": 1,
+          "samples": 25
+        },
+        "tensor_new_nested": {
+          "p50_ms": 134.17037099998197,
+          "p90_ms": 140.56829300000118,
+          "min_ms": 132.25384099996518,
+          "mean_ms": 135.04748839130056,
+          "allocs_per_call": 153238.0,
+          "batch": 1,
+          "samples": 23
+        },
+        "forward": {
+          "p50_ms": 1583.833129000027,
+          "p90_ms": 1595.9298100000296,
+          "min_ms": 1553.9235009999857,
+          "mean_ms": 1576.1671424000042,
+          "allocs_per_call": 3.0,
+          "batch": 1,
+          "samples": 5
+        },
+        "to_a_flat": {
+          "p50_ms": 1.1048710000522988,
+          "p90_ms": 1.5665079999962472,
+          "min_ms": 1.0373669999808044,
+          "mean_ms": 1.1858775600239824,
+          "allocs_per_call": 1.0,
+          "batch": 1,
+          "samples": 25
+        },
+        "to_a_nested": {
+          "p50_ms": 1.120189999937793,
+          "p90_ms": 1.7299060000368627,
+          "min_ms": 1.0436879999815574,
+          "mean_ms": 1.2455656800011639,
+          "allocs_per_call": 7.0,
+          "batch": 1,
+          "samples": 25
+        },
+        "e2e": {
+          "p50_ms": 1680.1996759999156,
+          "p90_ms": 1706.5600399999994,
+          "min_ms": 1643.74602099997,
+          "mean_ms": 1676.490115999968,
+          "allocs_per_call": 11.0,
+          "batch": 1,
+          "samples": 5
+        }
+      },
+      "binding_overhead_pct": 5.7
+    },
+    "resnet18": {
+      "regime": "compute",
+      "input_shape": [
+        1,
+        3,
+        224,
+        224
+      ],
+      "output_shape": [
+        1,
+        1000
+      ],
+      "params": 11689512,
+      "eager_p50_ms": 25.2618,
+      "eval": {
+        "passed": true,
+        "max_abs_error": 3.0994415283203125e-06,
+        "tolerance": 0.0001
+      },
+      "phases": {
+        "tensor_new_flat": {
+          "p50_ms": 92.2036309999612,
+          "p90_ms": 93.57744599992657,
+          "min_ms": 91.10361099999409,
+          "mean_ms": 93.15590187999533,
+          "allocs_per_call": 1.0,
+          "batch": 1,
+          "samples": 25
+        },
+        "tensor_new_nested": {
+          "p50_ms": 135.21731299999828,
+          "p90_ms": 145.03970199996274,
+          "min_ms": 132.3683150000079,
+          "mean_ms": 137.5184453636135,
+          "allocs_per_call": 153238.0,
+          "batch": 1,
+          "samples": 22
+        },
+        "forward": {
+          "p50_ms": 8260.745396999937,
+          "p90_ms": 8312.04729000001,
+          "min_ms": 8185.855024000034,
+          "mean_ms": 8250.059020999994,
+          "allocs_per_call": 3.0,
+          "batch": 1,
+          "samples": 5
+        },
+        "to_a_flat": {
+          "p50_ms": 1.0774900000569687,
+          "p90_ms": 1.4932889999954568,
+          "min_ms": 1.0376640000231419,
+          "mean_ms": 1.1572682399946643,
+          "allocs_per_call": 1.0,
+          "batch": 1,
+          "samples": 25
+        },
+        "to_a_nested": {
+          "p50_ms": 1.0859120000077382,
+          "p90_ms": 1.111513999944691,
+          "min_ms": 1.0420880000765465,
+          "mean_ms": 1.0853960800113782,
+          "allocs_per_call": 7.0,
+          "batch": 1,
+          "samples": 25
+        },
+        "e2e": {
+          "p50_ms": 9312.70320300007,
+          "p90_ms": 9411.727165999991,
+          "min_ms": 8422.749630999988,
+          "mean_ms": 9150.658892000001,
+          "allocs_per_call": 11.0,
+          "batch": 1,
+          "samples": 5
+        }
+      },
+      "binding_overhead_pct": 11.3
+    },
+    "tiny_mlp": {
+      "regime": "overhead",
+      "input_shape": [
+        1,
+        8
+      ],
+      "output_shape": [
+        1,
+        8
+      ],
+      "params": 72,
+      "eager_p50_ms": 0.0103,
+      "eval": {
+        "passed": true,
+        "max_abs_error": 5.960464477539063e-08,
+        "tolerance": 0.0001
+      },
+      "phases": {
+        "tensor_new_flat": {
+          "p50_ms": 0.02456460000151613,
+          "p90_ms": 0.032935800004452176,
+          "min_ms": 0.02241140000478481,
+          "mean_ms": 0.02702123466830623,
+          "allocs_per_call": 1.0,
+          "batch": 15,
+          "samples": 25
+        },
+        "tensor_new_nested": {
+          "p50_ms": 0.03305133333242338,
+          "p90_ms": 0.04895583333563991,
+          "min_ms": 0.029222833328882796,
+          "mean_ms": 0.0353861266671629,
+          "allocs_per_call": 18.0,
+          "batch": 6,
+          "samples": 25
+        },
+        "forward": {
+          "p50_ms": 0.01984440000342147,
+          "p90_ms": 0.026944499995806837,
+          "min_ms": 0.018113999999513908,
+          "mean_ms": 0.02129326000022047,
+          "allocs_per_call": 3.0,
+          "batch": 10,
+          "samples": 25
+        },
+        "to_a_flat": {
+          "p50_ms": 0.01269243750101623,
+          "p90_ms": 0.017476812502081884,
+          "min_ms": 0.011496687498890878,
+          "mean_ms": 0.013733722499296164,
+          "allocs_per_call": 1.0,
+          "batch": 16,
+          "samples": 25
+        },
+        "to_a_nested": {
+          "p50_ms": 0.019814099999848622,
+          "p90_ms": 0.02536895000275763,
+          "min_ms": 0.017912399999886475,
+          "mean_ms": 0.020795947999658893,
+          "allocs_per_call": 7.0,
+          "batch": 20,
+          "samples": 25
+        },
+        "e2e": {
+          "p50_ms": 0.08190175000777344,
+          "p90_ms": 0.11005799998997645,
+          "min_ms": 0.07286874998158055,
+          "mean_ms": 0.08943054000269512,
+          "allocs_per_call": 11.0,
+          "batch": 4,
+          "samples": 25
+        }
+      },
+      "binding_overhead_pct": 75.8
+    }
+  }
+}
