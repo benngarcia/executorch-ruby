@@ -94,6 +94,23 @@ tensor = Executorch::Tensor.new([1.0, 2.0, 3.0, 4.0], shape: [2, 2])
 
 **Supported dtypes:** `:float` (default), `:double`, `:int`, `:long`
 
+For large tensors, skip per-element conversion entirely and hand over packed
+bytes — the runtime memcpys them straight into the tensor buffer:
+
+```ruby
+# ~13x faster than the Array constructor on a 150k-element input
+tensor = Executorch::Tensor.from_bytes(pixels.pack("f*"), shape: [1, 3, 224, 224])
+
+# and back out
+bytes = tensor.to_binary
+values = bytes.unpack("f*")
+```
+
+This is the right path whenever your data is already bytes (an image decoded to
+a string, a file, a socket) or when you can pack once and reuse. Data must be
+native-endian and match the dtype's element width: `:float` → `"f*"`,
+`:double` → `"d*"`, `:int` → `"l*"`, `:long` → `"q*"`.
+
 ### Models
 
 ```ruby
@@ -130,6 +147,37 @@ et_program = to_edge(exported).to_executorch()
 with open("model.pte", "wb") as f:
     et_program.write_to_file(f)
 ```
+
+## Performance
+
+The single biggest factor in inference speed is **which kernels your ExecuTorch
+build links** — not the Ruby layer.
+
+A default build uses the portable kernels: reference implementations written for
+correctness and portability, with no vectorization or threading. They work
+everywhere and they are slow. On this repo's benchmarks, resnet18 takes ~8.3 s
+per call on portable kernels.
+
+Two independent ways to fix that:
+
+```bash
+cmake -B cmake-out \
+  -DEXECUTORCH_BUILD_KERNELS_OPTIMIZED=ON \   # faster CPU kernels, works on existing .pte
+  -DEXECUTORCH_BUILD_XNNPACK=ON \             # XNNPACK delegate, needs a re-export
+  ... # other flags as above
+```
+
+`extconf.rb` links whichever of these it finds in your ExecuTorch install. The
+XNNPACK delegate additionally requires the model to have been lowered with
+`XnnpackPartitioner` at export time — see `bench/pt_to_pte.py --xnnpack`.
+
+For the Ruby side: prefer `Tensor.from_bytes` over the Array constructor for
+large inputs, and `Tensor#flat_to_a` over `#to_a` when you don't need the nested
+shape.
+
+See [`bench/`](bench/) for the eval + profiling harness, and
+[`bench/FINDINGS.md`](bench/FINDINGS.md) for a walkthrough of where the time
+actually goes.
 
 ## Troubleshooting
 

@@ -52,7 +52,7 @@ def load_shapes(pt_path, explicit):
     )
 
 
-def convert(pt_path, pte_path, shapes, verbose=True):
+def convert(pt_path, pte_path, shapes, xnnpack=False, verbose=True):
     model = torch.load(pt_path, weights_only=False)
     model.eval()
 
@@ -63,7 +63,18 @@ def convert(pt_path, pte_path, shapes, verbose=True):
     t_export = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    program = to_edge(exported).to_executorch()
+    if xnnpack:
+        # Hand every subgraph XNNPACK can claim to the XNNPACK delegate; the
+        # rest falls back to portable kernels. The runtime must be built with
+        # EXECUTORCH_BUILD_XNNPACK=ON to load the result.
+        from executorch.backends.xnnpack.partition.xnnpack_partitioner import XnnpackPartitioner
+        from executorch.exir import to_edge_transform_and_lower
+
+        program = to_edge_transform_and_lower(
+            exported, partitioner=[XnnpackPartitioner()]
+        ).to_executorch()
+    else:
+        program = to_edge(exported).to_executorch()
     t_lower = time.perf_counter() - t0
 
     with open(pte_path, "wb") as fh:
@@ -89,14 +100,21 @@ def main():
         help="example input shape, e.g. 1,3,224,224. Repeat for multi-input models. "
              "Defaults to the shape in the .meta.json sidecar.",
     )
+    ap.add_argument(
+        "--xnnpack",
+        action="store_true",
+        help="lower supported subgraphs to the XNNPACK delegate instead of leaving "
+             "everything on portable kernels (writes <name>.xnnpack.pte by default)",
+    )
     args = ap.parse_args()
 
     if args.output and len(args.checkpoint) > 1:
         raise SystemExit("-o only makes sense with a single checkpoint")
 
+    suffix = ".xnnpack.pte" if args.xnnpack else ".pte"
     for pt_path in args.checkpoint:
-        pte_path = args.output or pt_path.replace(".pt", ".pte")
-        convert(pt_path, pte_path, load_shapes(pt_path, args.input_shape))
+        pte_path = args.output or pt_path.replace(".pt", suffix)
+        convert(pt_path, pte_path, load_shapes(pt_path, args.input_shape), xnnpack=args.xnnpack)
 
 
 if __name__ == "__main__":
