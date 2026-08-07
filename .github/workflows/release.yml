@@ -1,0 +1,94 @@
+name: Release
+
+# Publishes to RubyGems when a v* tag is pushed:
+#
+#   1. bump Executorch::VERSION and add a CHANGELOG entry
+#   2. git tag v0.2.0 && git push origin v0.2.0
+#
+# Publishing uses RubyGems trusted publishing (OIDC), so there is no API key in
+# repository secrets. Set it up once at
+# https://rubygems.org/gems/executorch/trusted_publishers with:
+#
+#   repository:  benngarcia/executorch-ruby
+#   workflow:    release.yml
+#   environment: release
+#
+# This ships a source gem -- the C++ extension is compiled on the user's
+# machine at install time against their own ExecuTorch build, so no
+# cross-compilation matrix is needed here.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and verify without publishing"
+        type: boolean
+        default: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: release
+
+    permissions:
+      contents: write # create the GitHub release
+      id-token: write # OIDC token for trusted publishing
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: false
+
+      - name: Check the tag matches Executorch::VERSION
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(ruby -r./lib/executorch/version -e 'print Executorch::VERSION')
+          tag="${GITHUB_REF#refs/tags/v}"
+          if [ "$version" != "$tag" ]; then
+            echo "Tag v$tag does not match Executorch::VERSION ($version)." >&2
+            echo "Bump lib/executorch/version.rb, or retag." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_ENV"
+
+      - name: Check the CHANGELOG has an entry
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          grep -q "## \[$version\]" CHANGELOG.md \
+            || { echo "CHANGELOG.md has no entry for $version"; exit 1; }
+
+      - name: Build the gem
+        run: gem build executorch.gemspec
+
+      # Catch a packaging mistake before it reaches RubyGems: the extension
+      # sources must be in the gem or it cannot build on install.
+      - name: Verify the package contents
+        run: |
+          gem_file=$(ls executorch-*.gem)
+          for required in \
+            ext/executorch/extconf.rb \
+            ext/executorch/executorch.cpp \
+            ext/executorch/utils.h \
+            lib/executorch.rb \
+            LICENSE.txt
+          do
+            tar -xOf "$gem_file" data.tar.gz | tar -tzf - | grep -qx "$required" \
+              || { echo "Missing from gem package: $required"; exit 1; }
+          done
+          echo "Package contents OK"
+
+      - name: Publish to RubyGems
+        if: startsWith(github.ref, 'refs/tags/') && !inputs.dry_run
+        uses: rubygems/release-gem@v1
+
+      - name: Create the GitHub release
+        if: startsWith(github.ref, 'refs/tags/') && !inputs.dry_run
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: executorch-*.gem
