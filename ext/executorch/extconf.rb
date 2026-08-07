@@ -150,32 +150,79 @@ libs.each do |lib|
   end
 end
 
-# Check for portable kernels (if available)
-# Use -force_load on macOS to include global constructors that register kernels
-portable_ops_lib = File.join(lib_dir, 'libportable_ops_lib.a')
-if File.exist?(portable_ops_lib)
-  $LDFLAGS += if RUBY_PLATFORM =~ /darwin/
-                # macOS: -force_load pulls in all symbols including global constructors
-                " -Wl,-force_load,#{portable_ops_lib}"
-              else
-                # Linux: --whole-archive achieves the same effect
-                ' -Wl,--whole-archive -lportable_ops_lib -Wl,--no-whole-archive'
-              end
-  puts '  Linking: portable_ops_lib (force_load)'
+# ==============================================================================
+# Self-registering libraries
+# ==============================================================================
+#
+# Operator kernels and backend delegates announce themselves from global
+# constructors at load time. A plain -l only pulls in the object files needed to
+# resolve an undefined symbol, and a self-registering object resolves nothing --
+# so the linker drops it and the registration never happens. The failure shows
+# up much later as "operator not found" or a missing backend when a model loads.
+#
+# These must be whole-archived: -force_load on macOS, --whole-archive on Linux.
 
-  # Portable kernels
-  if File.exist?(File.join(lib_dir, 'libportable_kernels.a'))
-    $LDFLAGS += ' -lportable_kernels'
-    puts '  Linking: portable_kernels'
+def force_load(lib_dir, lib)
+  path = File.join(lib_dir, "lib#{lib}.a")
+  return false unless File.exist?(path)
+
+  $LDFLAGS += if RUBY_PLATFORM =~ /darwin/
+                " -Wl,-force_load,#{path}"
+              else
+                " -Wl,--whole-archive -l#{lib} -Wl,--no-whole-archive"
+              end
+  puts "  Linking: #{lib} (whole archive)"
+  true
+end
+
+def link_if_present(lib_dir, lib, label = nil)
+  return false unless File.exist?(File.join(lib_dir, "lib#{lib}.a"))
+
+  $LDFLAGS += " -l#{lib}"
+  puts "  Linking: #{lib}#{label ? " (#{label})" : ''}"
+  true
+end
+
+# Exactly one operator library may be whole-archived. Each one registers the
+# full ATen op set into the same global table, so linking two makes the runtime
+# abort at init on duplicate registration.
+#
+#   optimized_native_cpu_ops_lib  vectorized kernels where they exist, portable
+#                                 fallbacks elsewhere. Built with
+#                                 EXECUTORCH_BUILD_KERNELS_OPTIMIZED=ON.
+#   portable_ops_lib              reference implementations only: correct,
+#                                 portable, and slow. Always available.
+#
+# Prefer the optimized set when the install has it. EXECUTORCH_OPS_LIB
+# overrides the choice.
+ops_lib = ENV['EXECUTORCH_OPS_LIB'] ||
+          %w[optimized_native_cpu_ops_lib portable_ops_lib].find do |lib|
+            File.exist?(File.join(lib_dir, "lib#{lib}.a"))
+          end
+
+if ops_lib && force_load(lib_dir, ops_lib)
+  # Kernel implementations backing the registrations above.
+  %w[optimized_kernels optimized_portable_kernels portable_kernels
+     cpublas eigen_blas].each do |lib|
+    link_if_present(lib_dir, lib)
+  end
+else
+  warn 'Warning: no operator library found; models will fail to load.'
+end
+
+# XNNPACK delegate, if ExecuTorch was built with EXECUTORCH_BUILD_XNNPACK=ON.
+# This only does anything for .pte files that were lowered with
+# XnnpackPartitioner at export time -- the backend has to be present at build
+# time and targeted at export time.
+if force_load(lib_dir, 'xnnpack_backend')
+  %w[XNNPACK xnnpack-microkernels-prod microkernels-prod].each do |lib|
+    link_if_present(lib_dir, lib)
   end
 end
 
-# CPU info and pthreadpool (often required)
-%w[cpuinfo pthreadpool].each do |lib|
-  if File.exist?(File.join(lib_dir, "lib#{lib}.a"))
-    $LDFLAGS += " -l#{lib}"
-    puts "  Linking: #{lib}"
-  end
+# Threadpool and CPU feature detection: needed by the optimized paths above.
+%w[extension_threadpool cpuinfo pthreadpool].each do |lib|
+  link_if_present(lib_dir, lib)
 end
 
 # Extra libraries from environment (consolidated from version B)

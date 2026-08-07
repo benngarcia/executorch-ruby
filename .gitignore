@@ -33,3 +33,11 @@ test/support/models/*.pte
 
 # Coverage
 /coverage/
+
+# Benchmark models (regenerate with bench/make_pt_models.py + bench/pt_to_pte.py).
+# Results are kept in git -- they're the evidence behind bench/FINDINGS.md.
+/bench/models/
+
+# Python
+__pycache__/
+*.pyc

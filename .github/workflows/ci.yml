@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Cheap checks that don't need a native build, so obvious mistakes fail fast.
+  # ---------------------------------------------------------------------------
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: false
+
+      - name: Check Ruby syntax
+        run: |
+          find lib test bench -name '*.rb' -print0 \
+            | xargs -0 -n1 ruby -c > /dev/null
+          ruby -c Rakefile > /dev/null
+          ruby -c ext/executorch/extconf.rb > /dev/null
+
+      - name: Check shell syntax
+        run: bash -n script/build-executorch.sh
+
+      - name: Build the gem package
+        run: gem build executorch.gemspec
+
+      - name: Version matches CHANGELOG
+        run: |
+          version=$(ruby -r./lib/executorch/version -e 'print Executorch::VERSION')
+          grep -q "## \[$version\]" CHANGELOG.md \
+            || { echo "CHANGELOG.md has no entry for $version"; exit 1; }
+
+  # ---------------------------------------------------------------------------
+  # ExecuTorch takes a long time to build, so build it once per OS and cache it.
+  # The test matrix restores that cache instead of rebuilding per Ruby version.
+  # ---------------------------------------------------------------------------
+  executorch:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same expression as the test job below -- they must agree or the test
+      # job restores nothing.
+      - name: Restore ExecuTorch
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: vendor/executorch
+          key: executorch-${{ matrix.os }}-${{ hashFiles('.executorch-version', 'script/build-executorch.sh') }}
+
+      - name: Install build tools
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          python3 -m pip install --upgrade "cmake>=3.29" zstd
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update && sudo apt-get install -y ninja-build
+          else
+            brew install ninja
+          fi
+
+      - name: Build ExecuTorch
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: script/build-executorch.sh
+        env:
+          # Portable kernels only: correct, and enough to test the bindings.
+          # The XNNPACK delegate is what you want in production (see
+          # bench/FINDINGS.md) but roughly triples the build time.
+          EXECUTORCH_BACKENDS: none
+
+  test:
+    needs: executorch
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        ruby: ["3.1", "3.2", "3.3", "3.4"]
+        include:
+          - os: macos-latest
+            ruby: "3.3"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore ExecuTorch
+        uses: actions/cache/restore@v4
+        with:
+          path: vendor/executorch
+          key: executorch-${{ matrix.os }}-${{ hashFiles('.executorch-version', 'script/build-executorch.sh') }}
+          fail-on-cache-miss: true
+
+      # A partial restore would be worse than none: an install built by an older
+      # script can be missing headers the extension needs.
+      - name: Verify the install is usable
+        run: |
+          test -f vendor/executorch/include/executorch/extension/module/module.h \
+            || { echo "ExecuTorch install is incomplete"; exit 1; }
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+
+      - name: Compile
+        run: bundle exec rake compile
+        env:
+          EXECUTORCH_DIR: ${{ github.workspace }}/vendor/executorch
+
+      - name: Test
+        run: bundle exec rake test
+        env:
+          EXECUTORCH_DIR: ${{ github.workspace }}/vendor/executorch

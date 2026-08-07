@@ -1,5 +1,7 @@
 # ExecuTorch Ruby
 
+[![CI](https://github.com/benngarcia/executorch-ruby/actions/workflows/ci.yml/badge.svg)](https://github.com/benngarcia/executorch-ruby/actions/workflows/ci.yml)
+
 Run PyTorch models in Ruby.
 
 [ExecuTorch](https://pytorch.org/executorch/) is Meta's lightweight runtime for deploying PyTorch models on edge devices. This gem provides Ruby bindings so you can run exported models (`.pte` files) directly in your Ruby applications.
@@ -26,23 +28,27 @@ puts output.to_a  # => [[3.0, 5.0, 7.0]]
 
 ### Step 1: Build ExecuTorch
 
-ExecuTorch must be built from source. Follow the [official guide](https://pytorch.org/executorch/stable/getting-started-setup.html), or use these commands:
+ExecuTorch must be built from source. This repo ships a script that does it:
 
 ```bash
-git clone https://github.com/pytorch/executorch.git
-cd executorch
-./install_requirements.sh
-
-cmake -B cmake-out \
-  -DCMAKE_INSTALL_PREFIX=vendor/executorch \
-  -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON \
-  -DEXECUTORCH_BUILD_EXTENSION_DATA_LOADER=ON \
-  -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
-  -DCMAKE_BUILD_TYPE=Release
-
-cmake --build cmake-out -j4
-cmake --install cmake-out
+script/build-executorch.sh
 ```
+
+It clones ExecuTorch at a pinned version, builds it, installs into
+`vendor/executorch`, and copies the headers that `cmake --install` leaves
+behind (`extension/module/module.h` and the `runtime/executor` tree are not
+installed by ExecuTorch's own install step, and this gem includes them
+directly).
+
+Add the XNNPACK delegate — strongly recommended, see [Performance](#performance)
+— with:
+
+```bash
+EXECUTORCH_BACKENDS=xnnpack script/build-executorch.sh
+```
+
+Needs CMake ≥ 3.29, Ninja, and a C++17 compiler. The first build takes a while;
+the ExecuTorch source and submodules are several GB.
 
 ### Step 2: Install the Gem
 
@@ -94,6 +100,23 @@ tensor = Executorch::Tensor.new([1.0, 2.0, 3.0, 4.0], shape: [2, 2])
 
 **Supported dtypes:** `:float` (default), `:double`, `:int`, `:long`
 
+For large tensors, skip per-element conversion entirely and hand over packed
+bytes — the runtime memcpys them straight into the tensor buffer:
+
+```ruby
+# ~13x faster than the Array constructor on a 150k-element input
+tensor = Executorch::Tensor.from_bytes(pixels.pack("f*"), shape: [1, 3, 224, 224])
+
+# and back out
+bytes = tensor.to_binary
+values = bytes.unpack("f*")
+```
+
+This is the right path whenever your data is already bytes (an image decoded to
+a string, a file, a socket) or when you can pack once and reuse. Data must be
+native-endian and match the dtype's element width: `:float` → `"f*"`,
+`:double` → `"d*"`, `:int` → `"l*"`, `:long` → `"q*"`.
+
 ### Models
 
 ```ruby
@@ -131,6 +154,43 @@ with open("model.pte", "wb") as f:
     et_program.write_to_file(f)
 ```
 
+## Performance
+
+The single biggest factor in inference speed is **which kernels your ExecuTorch
+build links** — not the Ruby layer.
+
+A default build uses the portable kernels: reference implementations written for
+correctness and portability, with no vectorization or threading. They work
+everywhere and they are slow — resnet18 takes **8.3 s** per call.
+
+Build with the XNNPACK delegate instead:
+
+```bash
+cmake -B cmake-out \
+  -DEXECUTORCH_BUILD_XNNPACK=ON \
+  ... # other flags as above
+```
+
+and export your model through the XNNPACK partitioner (see
+`bench/pt_to_pte.py --xnnpack`). Both halves are required — the backend has to
+be linked at build time *and* targeted at export time.
+
+That takes resnet18 from 8.3 s to **12.6 ms** — 658×, and about 2× faster than
+PyTorch eager on the same machine. `extconf.rb` links the backend automatically
+when it finds it in your ExecuTorch install.
+
+On the Ruby side, once the runtime is fast the boundary becomes the bottleneck:
+
+- Prefer `Tensor.from_bytes` over the Array constructor for large inputs. On
+  mobilenet_v2 that's 0.85 ms instead of 7.6 ms, against a 3.4 ms inference.
+- Prefer `Tensor#flat_to_a` over `#to_a` when you don't need the nested shape.
+- Prefer `Tensor.new(flat, shape: ...)` over a nested Array when you have the
+  choice — shape inference has to walk the nesting.
+
+See [`bench/`](bench/) for the eval + profiling harness, and
+[`bench/FINDINGS.md`](bench/FINDINGS.md) for the full walkthrough — including
+why fixing the kernels is what makes the binding work matter.
+
 ## Troubleshooting
 
 <details>
@@ -147,15 +207,20 @@ bundle config set --local build.executorch --with-executorch-dir=vendor/executor
 <details>
 <summary><strong>"module.h header not found"</strong></summary>
 
-ExecuTorch was built without required extensions. Rebuild with:
+Usually not a missing build flag — `cmake --install` doesn't install
+`extension/module/module.h` at all, even on a correct build. If you built
+ExecuTorch by hand, copy the remaining headers across:
 
 ```bash
-cmake -B cmake-out \
-  -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON \
-  -DEXECUTORCH_BUILD_EXTENSION_DATA_LOADER=ON \
-  -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
-  ...
+cd /path/to/executorch
+find runtime kernels extension -name '*.h' -not -path '*/test/*' \
+  | while read -r f; do
+      mkdir -p "$PREFIX/include/executorch/$(dirname "$f")"
+      cp "$f" "$PREFIX/include/executorch/$f"
+    done
 ```
+
+Or just use `script/build-executorch.sh`, which handles it.
 </details>
 
 <details>

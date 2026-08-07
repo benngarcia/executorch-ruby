@@ -17,30 +17,33 @@ task default: %i[compile test]
 namespace :executorch do
   desc 'Build ExecuTorch from source and install to vendor/executorch'
   task :build_deps do
-    source_dir = ENV.fetch('EXECUTORCH_SRC', File.expand_path('../executorch', __dir__))
-    install_dir = File.expand_path('vendor/executorch', __dir__)
+    # Delegates to the script so this task, the README, and CI all build
+    # ExecuTorch exactly the same way. Set EXECUTORCH_BACKENDS=xnnpack to
+    # include the delegate.
+    sh File.expand_path('script/build-executorch.sh', __dir__)
+  end
+end
 
-    unless File.directory?(source_dir)
-      abort "ExecuTorch source not found at #{source_dir}. Clone it or set EXECUTORCH_SRC."
-    end
+namespace :bench do
+  models_dir = File.expand_path('bench/models', __dir__)
 
-    puts "Building ExecuTorch from #{source_dir}..."
-    puts "Installing to #{install_dir}..."
+  desc 'Export the .pt benchmark checkpoints and convert them to .pte'
+  task :prepare do
+    sh 'python3', 'bench/make_pt_models.py', '--all'
+    sh "python3 bench/pt_to_pte.py #{models_dir}/*.pt"
+  end
 
-    Dir.chdir(source_dir) do
-      system('cmake', '-B', 'cmake-out',
-             "-DCMAKE_INSTALL_PREFIX=#{install_dir}",
-             '-DEXECUTORCH_BUILD_EXTENSION_MODULE=ON',
-             '-DEXECUTORCH_BUILD_EXTENSION_DATA_LOADER=ON',
-             '-DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON',
-             '-DCMAKE_BUILD_TYPE=Release') || abort('CMake configure failed')
+  desc 'Run evals + profiling (LABEL=name to tag the results file)'
+  task run: :compile do
+    sh 'ruby', 'bench/run_bench.rb', '--label', ENV.fetch('LABEL', 'current')
+  end
 
-      system('cmake', '--build', 'cmake-out', "-j#{Etc.nprocessors}") || abort('CMake build failed')
-      system('cmake', '--install', 'cmake-out') || abort('CMake install failed')
-    end
-
-    puts "ExecuTorch installed to #{install_dir}"
-    puts "Run: bundle config set --local build.executorch --with-executorch-dir=#{install_dir}"
+  desc 'Compare two result files: rake bench:compare BASE=baseline CURRENT=mine'
+  task :compare do
+    base = ENV.fetch('BASE', 'baseline')
+    current = ENV.fetch('CURRENT', 'current')
+    sh 'ruby', 'bench/compare.rb',
+       "bench/results/#{base}.json", "bench/results/#{current}.json"
   end
 end
 
