@@ -1,0 +1,197 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build & verify all gems without pushing to RubyGems"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify-metadata:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      publish: ${{ steps.ver.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+
+      - name: Verify version and CHANGELOG consistency
+        id: ver
+        run: |
+          VERSION=$(ruby -Ilib -rexecutorch/version -e 'puts Executorch::VERSION')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          grep -Fq "## [$VERSION]" CHANGELOG.md || {
+            echo "CHANGELOG.md is missing heading: ## [$VERSION]"
+            exit 1
+          }
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG_VER="${GITHUB_REF#refs/tags/v}"
+            if [[ "$TAG_VER" != "$VERSION" ]]; then
+              echo "Tag v$TAG_VER does not match Executorch::VERSION ($VERSION)"
+              exit 1
+            fi
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ inputs.dry_run }}" == "false" ]]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-platform-gems:
+    needs: verify-metadata
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: x86_64-linux
+          - os: ubuntu-24.04-arm
+            platform: aarch64-linux
+          - os: macos-15
+            platform: arm64-darwin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Export fixtures for pre-release verification
+        run: |
+          uv run --project test/fixtures python test/fixtures/export_fixtures.py --out test/fixtures/models
+
+      - name: Build fat extension for Ruby 3.2, 3.3, 3.4
+        run: |
+          mkdir -p staged_lib
+          echo "matrix=${{ matrix.platform }}"
+
+      - name: Compile Ruby 3.2 extension
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"
+          bundler-cache: true
+      - run: |
+          EXECUTORCH_BUNDLE_VENDOR=1 bundle exec rake sdk:fetch compile
+          bundle exec rake test
+          mkdir -p staged/3.2
+          cp lib/executorch/executorch.* staged/3.2/
+
+      - name: Compile Ruby 3.3 extension
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+      - run: |
+          EXECUTORCH_BUNDLE_VENDOR=1 bundle exec rake clean compile
+          bundle exec rake test
+          mkdir -p staged/3.3
+          cp lib/executorch/executorch.* staged/3.3/
+
+      - name: Compile Ruby 3.4 extension & assemble fat gem
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+      - run: |
+          EXECUTORCH_BUNDLE_VENDOR=1 bundle exec rake clean compile
+          bundle exec rake test
+          mkdir -p lib/executorch/3.2 lib/executorch/3.3 lib/executorch/3.4
+          cp staged/3.2/executorch.* lib/executorch/3.2/
+          cp staged/3.3/executorch.* lib/executorch/3.3/
+          mv lib/executorch/executorch.* lib/executorch/3.4/
+          ruby -e '
+            require "rubygems/package"
+            spec = Gem::Specification.load("executorch.gemspec")
+            spec.platform = Gem::Platform.new("${{ matrix.platform }}")
+            spec.extensions = []
+            spec.files = (
+              spec.files.reject { |f| f.start_with?("ext/") } +
+              Dir["lib/executorch/3.*/*"] +
+              Dir["lib/executorch/vendor/*"]
+            ).uniq.sort
+            FileUtils.mkdir_p("pkg")
+            out = Gem::Package.build(spec)
+            FileUtils.mv(out, File.join("pkg", File.basename(out)))
+          '
+          # Isolated smoke test without SDK cache
+          rm -rf ~/.cache/executorch-ruby
+          GEM_HOME=$(mktemp -d)
+          GEM_HOME="$GEM_HOME" gem install --local --no-document pkg/executorch-*-${{ matrix.platform }}.gem
+          GEM_HOME="$GEM_HOME" ruby -rexecutorch -e '
+            raise "missing XNNPACK" unless Executorch.backends.include?("XnnpackBackend")
+            puts "Verified fat gem: #{Executorch::VERSION} (#{Executorch.backends.inspect})"
+          '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gem-${{ matrix.platform }}
+          path: pkg/*.gem
+
+  build-source-gem:
+    needs: verify-metadata
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+      - run: |
+          mkdir -p pkg
+          gem build executorch.gemspec -o "pkg/executorch-${{ needs.verify-metadata.outputs.version }}.gem"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gem-source
+          path: pkg/*.gem
+
+  publish:
+    needs: [verify-metadata, build-platform-gems, build-source-gem]
+    if: needs.verify-metadata.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Configure RubyGems Trusted Publishing (OIDC)
+        uses: rubygems/configure-rubygems-credentials@v1
+
+      - name: Push verified gems to RubyGems
+        run: |
+          for g in dist/*.gem; do
+            echo "Pushing $g"
+            gem push "$g"
+          done
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/*.gem \
+            --title "v${{ needs.verify-metadata.outputs.version }}" \
+            --generate-notes

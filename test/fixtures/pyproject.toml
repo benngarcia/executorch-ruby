@@ -1,0 +1,8 @@
+[project]
+name = "executorch-ruby-fixtures"
+version = "1.0.0"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "executorch==1.6.0",
+    "torch>=2.10",
+]

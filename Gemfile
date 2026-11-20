@@ -1,8 +1,9 @@
+# frozen_string_literal: true
+
 source "https://rubygems.org"
 
 gemspec
 
-group :development do
-  gem "rake-compiler"
-  gem "minitest", "~> 5.0"
-end
+gem "minitest", "~> 5.25"
+gem "rake", "~> 13.2"
+gem "rake-compiler", "~> 1.2"
