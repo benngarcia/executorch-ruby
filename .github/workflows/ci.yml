@@ -1,0 +1,150 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }}, Ruby ${{ matrix.ruby }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            ruby: "3.2"
+          - os: ubuntu-24.04
+            ruby: "3.3"
+          - os: ubuntu-24.04
+            ruby: "3.4"
+          - os: ubuntu-24.04-arm
+            ruby: "3.4"
+          - os: macos-15
+            ruby: "3.2"
+          - os: macos-15
+            ruby: "3.4"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Cache ExecuTorch C++ SDK
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/executorch-ruby
+          key: sdk-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('.executorch-version', 'lib/executorch/sdk.rb') }}
+
+      - name: Fetch ExecuTorch SDK & compile native extension
+        run: |
+          bundle exec rake sdk:fetch
+          bundle exec rake compile
+
+      - name: Export deterministic .pte / .ptd test fixtures
+        run: |
+          uv run --project test/fixtures python test/fixtures/export_fixtures.py --out test/fixtures/models
+
+      - name: Run full test suite (zero skips allowed)
+        run: |
+          set -o pipefail
+          bundle exec rake test TESTOPTS="-v" | tee test_output.txt
+          grep -qE "0 failures, 0 errors, 0 skips" test_output.txt
+
+  sanitizers:
+    name: ASan + UBSan (ubuntu-24.04, Ruby 3.4)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Cache ExecuTorch C++ SDK
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/executorch-ruby
+          key: sdk-ubuntu-24.04-${{ runner.arch }}-${{ hashFiles('.executorch-version', 'lib/executorch/sdk.rb') }}
+
+      - name: Compile with ASan + UBSan
+        env:
+          EXECUTORCH_SANITIZE: "1"
+        run: |
+          bundle exec rake sdk:fetch
+          bundle exec rake compile
+
+      - name: Export fixtures
+        run: |
+          uv run --project test/fixtures python test/fixtures/export_fixtures.py --out test/fixtures/models
+
+      - name: Run tests under ASan + UBSan
+        run: |
+          ASAN_LIB=$(g++ -print-file-name=libasan.so)
+          UBSAN_LIB=$(g++ -print-file-name=libubsan.so)
+          LD_PRELOAD="${ASAN_LIB}:${UBSAN_LIB}" \
+          ASAN_OPTIONS="detect_leaks=0:use_sigaltstack=0:halt_on_error=1" \
+          UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1" \
+            bundle exec rake test TESTOPTS="-v"
+
+  package-smoke:
+    name: Platform Gem Smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+
+      - name: Build platform fat gem & source gem
+        run: |
+          bundle exec rake sdk:fetch
+          bundle exec rake package_platform
+          gem build executorch.gemspec -o pkg/executorch-source.gem
+
+      - name: Smoke-test isolated platform gem install (no SDK cache required)
+        run: |
+          rm -rf ~/.cache/executorch-ruby
+          GEM_HOME=$(mktemp -d)
+          export GEM_HOME
+          export PATH="$GEM_HOME/bin:$PATH"
+          gem install --local --no-document pkg/executorch-*-*.gem
+          ruby -rexecutorch -e '
+            raise "missing XNNPACK" unless Executorch.backends.include?("XnnpackBackend")
+            t = Executorch::Tensor.new([[1.0, 2.0], [3.0, 4.0]])
+            raise "bad roundtrip" unless t.to_a == [[1.0, 2.0], [3.0, 4.0]]
+            puts "OK: #{Executorch::VERSION} / SDK #{Executorch.executorch_version} / #{Executorch.backends.inspect}"
+          '
