@@ -736,8 +736,11 @@ void init_module(VALUE mExecutorch) {
 
   g_refs.cMethodMeta = rb_const_get(mExecutorch, rb_intern("MethodMeta"));
   g_refs.cTensorInfo = rb_const_get(mExecutorch, rb_intern("TensorInfo"));
+  rb_global_variable(&g_refs.cMethodMeta);
+  rb_global_variable(&g_refs.cTensorInfo);
 
   g_refs.cModule = rb_define_class_under(mExecutorch, "Module", rb_cObject);
+  rb_global_variable(&g_refs.cModule);
   rb_undef_alloc_func(g_refs.cModule);
 
   rb_define_singleton_method(g_refs.cModule, "_open_file", rb_module_s_open_file, -1);

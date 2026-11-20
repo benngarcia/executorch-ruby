@@ -37,6 +37,17 @@ void init_errors(VALUE mExecutorch) {
       rb_define_class_under(mExecutorch, "MemoryError", g_refs.eError);
   g_refs.eClosedError =
       rb_define_class_under(mExecutorch, "ClosedError", g_refs.eError);
+
+  rb_global_variable(&g_refs.eError);
+  rb_global_variable(&g_refs.eLoadError);
+  rb_global_variable(&g_refs.eMethodNotFoundError);
+  rb_global_variable(&g_refs.eOperatorMissingError);
+  rb_global_variable(&g_refs.eDelegateError);
+  rb_global_variable(&g_refs.eShapeError);
+  rb_global_variable(&g_refs.eDTypeError);
+  rb_global_variable(&g_refs.eExecutionError);
+  rb_global_variable(&g_refs.eMemoryError);
+  rb_global_variable(&g_refs.eClosedError);
 }
 
 VALUE status_to_ruby_exception(const Status& st) {

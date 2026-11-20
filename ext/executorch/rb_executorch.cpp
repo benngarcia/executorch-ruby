@@ -55,6 +55,7 @@ extern "C" __attribute__((visibility("default"))) void Init_executorch(void) {
 
   VALUE mExecutorch = rb_define_module("Executorch");
   etrb::g_refs.mExecutorch = mExecutorch;
+  rb_global_variable(&etrb::g_refs.mExecutorch);
 
   etrb::init_errors(mExecutorch);
   etrb::init_tensor(mExecutorch);

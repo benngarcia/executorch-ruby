@@ -1251,6 +1251,7 @@ void init_tensor(VALUE mExecutorch) {
   g_refs.id_kw_dtype = rb_intern("dtype");
 
   g_refs.cTensor = rb_define_class_under(mExecutorch, "Tensor", rb_cObject);
+  rb_global_variable(&g_refs.cTensor);
   rb_undef_alloc_func(g_refs.cTensor);
 
   rb_define_singleton_method(g_refs.cTensor, "new", rb_tensor_s_new, -1);

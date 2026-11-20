@@ -139,6 +139,11 @@ class SafetyTest < Minitest::Test
       end
 
       GC.compact if GC.respond_to?(:compact)
+      # Exercise every cached Ruby class VALUE (MethodMeta, TensorInfo, Tensor, Errors) after GC.compact
+      meta = mod.meta(:forward)
+      assert_equal "forward", meta.name
+      assert_equal 1, meta.inputs.size
+      assert_raises(Executorch::MethodNotFoundError) { mod.meta(:missing_after_compact) }
       out = mod.call(Executorch::Tensor.new([[2.0, 3.0, 4.0]]))
       assert_equal [[5.0, 7.0, 9.0]], out.to_a
     end
@@ -153,20 +158,28 @@ class SafetyTest < Minitest::Test
     # A. Prove background Ruby thread ticks continuously during native inference
     Executorch::Module.open(pte) do |mod|
       mod.load_method(:forward)
+      ready = Queue.new
       ticks = 0
       stop = false
       ticker = Thread.new do
+        ready << true
         until stop
           ticks += 1
           Thread.pass
         end
       end
+      ready.pop
 
-      25.times { mod.call(input) }
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 2.0
+      runs = 0
+      while runs < 40 && (ticks < 50 || runs < 5) && Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
+        mod.call(input)
+        runs += 1
+      end
       stop = true
       ticker.join
 
-      assert_operator ticks, :>, 10, "Background Ruby thread starved (ticks=#{ticks}) — GVL was held!"
+      assert_operator ticks, :>, 10, "Background Ruby thread starved (ticks=#{ticks}, runs=#{runs}) — GVL was held!"
     end
 
     # B. 4 threads sharing ONE Module instance serialize safely with exact results
