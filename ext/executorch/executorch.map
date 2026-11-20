@@ -1,0 +1,6 @@
+{
+  global:
+    Init_executorch;
+  local:
+    *;
+};
