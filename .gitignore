@@ -1,35 +1,32 @@
-# Bundler
-/.bundle/
-/vendor/bundle/
-/vendor/executorch/
-Gemfile.lock
+*.gem
+*.rbc
+/.config
+/coverage/
+/InstalledFiles
+/pkg/
+/spec/reports/
+/spec/examples.txt
+/test/tmp/
+/test/version_tmp/
+/tmp/
+/vendor/
+/lib/executorch/vendor/
+/lib/executorch/3.*/
+/test/fixtures/models/
 
 # Build artifacts
-/tmp/
-/pkg/
-*.gem
-*.so
-*.bundle
-*.o
-*.a
-Makefile
-mkmf.log
+ext/executorch/Makefile
+ext/executorch/mkmf.log
+ext/executorch/*.o
+ext/executorch/*.so
+ext/executorch/*.bundle
+lib/executorch/*.so
+lib/executorch/*.bundle
 
-# IDE
-.idea/
+# Bundler / IDE
+.bundle/
+Gemfile.lock
+.DS_Store
 *.swp
 *.swo
-.vscode/
-
-# macOS
-.DS_Store
-
-# Test models (generated)
-test/support/models/*.pte
-
-# Generated documentation
-/doc/
-/rdoc/
-
-# Coverage
-/coverage/
+*~
