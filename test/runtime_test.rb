@@ -51,15 +51,23 @@ class RuntimeTest < Minitest::Test
   end
 
   def test_native_extension_exports_only_init_executorch
-    skip "ELF nm check only runs on Linux" unless RbConfig::CONFIG["target_os"] =~ /linux/i
+    dlext = RbConfig::CONFIG["DLEXT"]
+    ext_path = File.expand_path("../lib/executorch/executorch.#{dlext}", __dir__)
+    assert File.exist?(ext_path), "expected compiled extension at #{ext_path}"
 
-    so = File.expand_path("../lib/executorch/executorch.so", __dir__)
-    skip "no compiled .so at #{so}" unless File.exist?(so)
-
-    out = `nm -D --defined-only #{so} 2>/dev/null`
-    skip "nm not available" unless $?.success?
-
-    syms = out.lines.map { |l| l.split.last }.compact
-    assert_equal ["Init_executorch"], syms, "Unexpected exported symbols leak: #{syms.inspect}"
+    case RbConfig::CONFIG["target_os"]
+    when /linux/i
+      out = `nm -D --defined-only #{ext_path} 2>/dev/null`
+      assert $?.success?, "nm -D failed on #{ext_path}"
+      syms = out.lines.map { |l| l.split.last }.compact
+      assert_equal ["Init_executorch"], syms, "Unexpected exported symbols leak: #{syms.inspect}"
+    when /darwin/i
+      out = `nm -gU #{ext_path} 2>/dev/null`
+      assert $?.success?, "nm -gU failed on #{ext_path}"
+      syms = out.lines.map { |l| l.split.last }.compact
+      assert_equal ["_Init_executorch"], syms, "Unexpected exported symbols leak: #{syms.inspect}"
+    else
+      flunk "Unsupported target_os for symbol check: #{RbConfig::CONFIG['target_os']}"
+    end
   end
 end
