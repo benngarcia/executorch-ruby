@@ -69,22 +69,22 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "test/fixtures/pyproject.toml"
 
       - name: Export fixtures for pre-release verification
         run: |
           uv run --project test/fixtures python test/fixtures/export_fixtures.py --out test/fixtures/models
 
-      - name: Build fat extension for Ruby 3.2, 3.3, 3.4
-        run: |
-          mkdir -p staged_lib
-          echo "matrix=${{ matrix.platform }}"
-
       - name: Compile Ruby 3.2 extension
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.2"
-          bundler-cache: true
+          bundler-cache: false
       - run: |
+          rm -rf Gemfile.lock .bundle vendor/bundle
+          bundle install --jobs 4
           EXECUTORCH_BUNDLE_VENDOR=1 bundle exec rake sdk:fetch compile
           bundle exec rake test
           mkdir -p staged/3.2
@@ -94,8 +94,10 @@ jobs:
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"
-          bundler-cache: true
+          bundler-cache: false
       - run: |
+          rm -rf Gemfile.lock .bundle vendor/bundle
+          bundle install --jobs 4
           EXECUTORCH_BUNDLE_VENDOR=1 bundle exec rake clean compile
           bundle exec rake test
           mkdir -p staged/3.3
@@ -105,8 +107,10 @@ jobs:
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.4"
-          bundler-cache: true
+          bundler-cache: false
       - run: |
+          rm -rf Gemfile.lock .bundle vendor/bundle
+          bundle install --jobs 4
           EXECUTORCH_BUNDLE_VENDOR=1 bundle exec rake clean compile
           bundle exec rake test
           mkdir -p lib/executorch/3.2 lib/executorch/3.3 lib/executorch/3.4
@@ -114,6 +118,7 @@ jobs:
           cp staged/3.3/executorch.* lib/executorch/3.3/
           mv lib/executorch/executorch.* lib/executorch/3.4/
           ruby -e '
+            require "fileutils"
             require "rubygems/package"
             spec = Gem::Specification.load("executorch.gemspec")
             spec.platform = Gem::Platform.new("${{ matrix.platform }}")
