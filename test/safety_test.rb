@@ -160,26 +160,34 @@ class SafetyTest < Minitest::Test
       mod.load_method(:forward)
       ready = Queue.new
       ticks = 0
+      counting = false
       stop = false
       ticker = Thread.new do
         ready << true
         until stop
-          ticks += 1
+          ticks += 1 if counting
           Thread.pass
         end
       end
       ready.pop
 
-      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 2.0
+      start = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      min_end = start + 0.25
+      max_end = start + 2.0
       runs = 0
-      while runs < 40 && (ticks < 50 || runs < 5) && Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
+      counting = true
+      while (runs < 5 || Process.clock_gettime(Process::CLOCK_MONOTONIC) < min_end) &&
+            Process.clock_gettime(Process::CLOCK_MONOTONIC) < max_end
         mod.call(input)
         runs += 1
       end
+      counting = false
+      elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - start
       stop = true
       ticker.join
 
-      assert_operator ticks, :>, 10, "Background Ruby thread starved (ticks=#{ticks}, runs=#{runs}) — GVL was held!"
+      assert_operator ticks, :>, 20,
+        "Background Ruby thread starved (ticks=#{ticks}, runs=#{runs}, elapsed=#{format('%.3fs', elapsed)}) — GVL was held!"
     end
 
     # B. 4 threads sharing ONE Module instance serialize safely with exact results
